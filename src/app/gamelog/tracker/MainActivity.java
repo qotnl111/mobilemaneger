@@ -16,6 +16,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.net.Uri;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -25,14 +26,19 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Process;
 import android.provider.Settings;
+import android.text.InputType;
+import android.text.TextUtils;
 import android.util.TypedValue;
+import android.util.Xml;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -42,11 +48,13 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -55,6 +63,7 @@ import java.util.Map;
 import java.util.Set;
 
 import org.json.JSONObject;
+import org.xmlpull.v1.XmlPullParser;
 
 public class MainActivity extends Activity {
 
@@ -80,6 +89,11 @@ public class MainActivity extends Activity {
     int generation = 0;
 
     LinearLayout strip;
+    LinearLayout detail;
+    String selected;
+    List<Item> lastItems = new ArrayList<Item>();
+    final Map<String, List<String[]>> newsCache = new HashMap<String, List<String[]>>();
+    final Map<String, Long> newsTime = new HashMap<String, Long>();
     LinearLayout permBox;
     TextView summary;
     volatile String todayKey = "";
@@ -199,15 +213,20 @@ public class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView hint = text("카드를 누르면 게임 실행 · 안 한 게임이 왼쪽부터 나와요\n여러 게임 빼기와 완료 기준은 설정에서 바꿔요", 12, SUB, false);
-        hint.setPadding(dp(20), dp(4), dp(20), dp(16));
-        hint.setLineSpacing(dp(3), 1f);
-        root.addView(hint);
+        ScrollView ds = new ScrollView(this);
+        ds.setVerticalScrollBarEnabled(false);
+        detail = new LinearLayout(this);
+        detail.setOrientation(LinearLayout.VERTICAL);
+        detail.setPadding(dp(20), dp(4), dp(20), dp(16));
+        ds.addView(detail, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(ds, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         // buttons
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(dp(20), 0, dp(20), dp(20));
+        row.setPadding(dp(20), dp(10), dp(20), dp(16));
         TextView add = button("+ 게임 추가", TODO, 0xFF1A1300);
         add.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
@@ -234,7 +253,8 @@ public class MainActivity extends Activity {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setPadding(dp(14), dp(14), dp(14), dp(14));
-        c.setBackground(box(CARD, it.played ? LINE : TODO, 18));
+        final boolean sel = it.pkg.equals(selected);
+        c.setBackground(box(sel ? 0xFF282C39 : CARD, sel ? TEXT : (it.played ? LINE : TODO), 18));
 
         ImageView icon = new ImageView(this);
         if (it.icon != null) icon.setImageDrawable(it.icon);
@@ -243,7 +263,7 @@ public class MainActivity extends Activity {
 
         TextView name = text(it.label, 15, TEXT, true);
         name.setSingleLine(true);
-        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        name.setEllipsize(TextUtils.TruncateAt.END);
         name.setPadding(0, dp(10), 0, dp(6));
         c.addView(name);
 
@@ -290,6 +310,19 @@ public class MainActivity extends Activity {
         c.addView(w);
         c.addView(text("누적  " + fmt(it.total), 12, SUB, false));
 
+        TextView run = button("▶ 실행", TODO, 0xFF1A1300);
+        run.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        run.setPadding(dp(8), dp(9), dp(8), dp(9));
+        run.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                launch(it);
+            }
+        });
+        LinearLayout.LayoutParams runlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        runlp.setMargins(0, dp(12), 0, 0);
+        c.addView(run, runlp);
+
         if (it.days[0] < minMs()) {
             TextView mark = button(it.manual ? "완료 취소" : "완료 처리",
                     it.manual ? LINE : 0x224ADE80, it.manual ? SUB : DONE);
@@ -305,23 +338,16 @@ public class MainActivity extends Activity {
             });
             LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            mlp.setMargins(0, dp(12), 0, 0);
+            mlp.setMargins(0, dp(8), 0, 0);
             c.addView(mark, mlp);
         }
 
         c.setClickable(true);
         c.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                try {
-                    Intent li = pm.getLaunchIntentForPackage(it.pkg);
-                    if (li != null) {
-                        startActivity(li);
-                    } else {
-                        Toast.makeText(MainActivity.this, "이 게임을 실행할 수 없어요", Toast.LENGTH_SHORT).show();
-                    }
-                } catch (Exception e) {
-                    Toast.makeText(MainActivity.this, "이 게임을 실행할 수 없어요", Toast.LENGTH_SHORT).show();
-                }
+                selected = it.pkg;
+                prefs.edit().putString("sel", it.pkg).apply();
+                render(lastItems);
             }
         });
         c.setOnLongClickListener(new View.OnLongClickListener() {
@@ -346,6 +372,17 @@ public class MainActivity extends Activity {
     }
 
     void render(List<Item> items) {
+        lastItems = items;
+        if (selected == null) selected = prefs.getString("sel", null);
+        Item selItem = null;
+        for (int i = 0; i < items.size(); i++) {
+            if (items.get(i).pkg.equals(selected)) selItem = items.get(i);
+        }
+        if (selItem == null && !items.isEmpty()) {
+            selItem = items.get(0);
+            selected = selItem.pkg;
+        }
+        showDetail(selItem);
         strip.removeAllViews();
         int done = 0;
         for (int i = 0; i < items.size(); i++) {
@@ -366,6 +403,339 @@ public class MainActivity extends Activity {
             lp.setMargins(0, 0, dp(12), 0);
             strip.addView(card(items.get(i)), lp);
         }
+    }
+
+    // ---------- detail panel ----------
+
+    void launch(Item it) {
+        try {
+            Intent li = pm.getLaunchIntentForPackage(it.pkg);
+            if (li != null) {
+                startActivity(li);
+                return;
+            }
+        } catch (Exception e) {
+            // fall through to the message
+        }
+        Toast.makeText(this, "이 게임을 실행할 수 없어요", Toast.LENGTH_SHORT).show();
+    }
+
+    void openUrl(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception e) {
+            Toast.makeText(this, "링크를 열 수 없어요", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    static String enc(String q) {
+        try {
+            return URLEncoder.encode(q, "UTF-8");
+        } catch (Exception e) {
+            return q;
+        }
+    }
+
+    static String shortFmt(long ms) {
+        long min = ms / 60000L;
+        if (min < 1) return ms > 0 ? "1분↓" : "";
+        if (min < 60) return min + "분";
+        return (min / 60L) + "시간";
+    }
+
+    String dayName(int back) {
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(dayStart(back, null));
+        return String.valueOf("일월화수목금토".charAt(c.get(Calendar.DAY_OF_WEEK) - 1));
+    }
+
+    LinearLayout linkRow(TextView a, TextView b) {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams la = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        la.setMargins(0, 0, dp(8), dp(8));
+        LinearLayout.LayoutParams lb = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lb.setMargins(0, 0, 0, dp(8));
+        r.addView(a, la);
+        r.addView(b, lb);
+        return r;
+    }
+
+    void showDetail(final Item it) {
+        detail.removeAllViews();
+        if (it == null) {
+            detail.addView(text("게임을 추가하면 여기에 기록과 뉴스가 나와요", 13, SUB, false));
+            return;
+        }
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView name = text(it.label, 19, TEXT, true);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        top.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView run = button("▶ 실행", TODO, 0xFF1A1300);
+        run.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                launch(it);
+            }
+        });
+        top.addView(run);
+        detail.addView(top);
+
+        TextView st = text("오늘 " + fmt(it.days[0]) + " · 7일 " + fmt(it.week) + " · 누적 " + fmt(it.total),
+                13, SUB, false);
+        st.setPadding(0, dp(6), 0, dp(12));
+        detail.addView(st);
+
+        // 7-day chart, oldest on the left
+        LinearLayout chart = new LinearLayout(this);
+        chart.setOrientation(LinearLayout.HORIZONTAL);
+        chart.setBackground(box(CARD, 0, 16));
+        chart.setPadding(dp(8), dp(12), dp(8), dp(12));
+        long max = minMs();
+        for (int i = 0; i < DAYS; i++) max = Math.max(max, it.days[i]);
+        for (int i = DAYS - 1; i >= 0; i--) {
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setGravity(Gravity.CENTER_HORIZONTAL);
+            TextView val = text(shortFmt(it.days[i]), 10, SUB, false);
+            val.setGravity(Gravity.CENTER);
+            col.addView(val);
+            LinearLayout holder = new LinearLayout(this);
+            holder.setGravity(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            View bar = new View(this);
+            bar.setBackground(box(it.done[i] ? DONE : (it.days[i] > 0 ? TODO : LINE), 0, 4));
+            int h = Math.max(dp(3), (int) (dp(52) * ((double) it.days[i] / (double) max)));
+            holder.addView(bar, new LinearLayout.LayoutParams(dp(16), h));
+            LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(54));
+            hlp.setMargins(0, dp(2), 0, dp(4));
+            col.addView(holder, hlp);
+            TextView dl = text(i == 0 ? "오늘" : dayName(i), 11, i == 0 ? TEXT : SUB, i == 0);
+            dl.setGravity(Gravity.CENTER);
+            col.addView(dl);
+            chart.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        }
+        detail.addView(chart);
+
+        // quick links
+        TextView lh = text("바로가기", 15, TEXT, true);
+        lh.setPadding(0, dp(18), 0, dp(8));
+        detail.addView(lh);
+        TextView store = button("스토어 페이지", CARD, TEXT);
+        store.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=" + it.pkg)));
+                } catch (Exception e) {
+                    openUrl("https://play.google.com/store/apps/details?id=" + it.pkg);
+                }
+            }
+        });
+        TextView site = button("공식 사이트 찾기", CARD, TEXT);
+        site.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                openUrl("https://www.google.com/search?q=" + enc(it.label + " 공식 사이트"));
+            }
+        });
+        TextView tube = button("유튜브 영상", CARD, TEXT);
+        tube.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                openUrl("https://www.youtube.com/results?search_query=" + enc(it.label));
+            }
+        });
+        final String mine = prefs.getString("u:" + it.pkg, null);
+        TextView my = button(mine == null ? "+ 내 링크 등록" : "내 링크 열기", CARD, mine == null ? SUB : TODO);
+        my.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (mine == null) editLink(it);
+                else openUrl(mine);
+            }
+        });
+        my.setOnLongClickListener(new View.OnLongClickListener() {
+            public boolean onLongClick(View v) {
+                editLink(it);
+                return true;
+            }
+        });
+        detail.addView(linkRow(store, site));
+        detail.addView(linkRow(tube, my));
+        if (mine != null) {
+            detail.addView(text("내 링크는 길게 눌러 수정", 11, SUB, false));
+        }
+
+        // news
+        TextView nh = text("최신 뉴스", 15, TEXT, true);
+        nh.setPadding(0, dp(14), 0, dp(8));
+        detail.addView(nh);
+        LinearLayout newsBox = new LinearLayout(this);
+        newsBox.setOrientation(LinearLayout.VERTICAL);
+        detail.addView(newsBox);
+        loadNews(it, newsBox);
+    }
+
+    void editLink(final Item it) {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setHint("https://");
+        String cur = prefs.getString("u:" + it.pkg, "");
+        input.setText(cur);
+        new AlertDialog.Builder(this)
+                .setTitle(it.label + " 내 링크")
+                .setMessage("공식 카페, 쿠폰 입력 페이지처럼 자주 가는 주소를 넣어 두세요. 비우면 삭제돼요.")
+                .setView(input)
+                .setPositiveButton("저장", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        String u = input.getText().toString().trim();
+                        if (u.length() == 0) {
+                            prefs.edit().remove("u:" + it.pkg).apply();
+                        } else {
+                            if (!u.startsWith("http://") && !u.startsWith("https://")) u = "https://" + u;
+                            prefs.edit().putString("u:" + it.pkg, u).apply();
+                        }
+                        render(lastItems);
+                    }
+                })
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
+    void loadNews(final Item it, final LinearLayout newsBox) {
+        Long at = newsTime.get(it.pkg);
+        List<String[]> cached = newsCache.get(it.pkg);
+        if (cached != null && at != null && System.currentTimeMillis() - at.longValue() < 30L * 60L * 1000L) {
+            fillNews(newsBox, cached, it);
+            return;
+        }
+        newsBox.addView(text("불러오는 중…", 13, SUB, false));
+        final String pkg = it.pkg;
+        final String label = it.label;
+        new Thread(new Runnable() {
+            public void run() {
+                List<String[]> got = null;
+                try {
+                    got = fetchNews(label);
+                } catch (Exception e) {
+                    got = null;
+                }
+                final List<String[]> list = got;
+                ui.post(new Runnable() {
+                    public void run() {
+                        if (list != null) {
+                            newsCache.put(pkg, list);
+                            newsTime.put(pkg, Long.valueOf(System.currentTimeMillis()));
+                        }
+                        if (isFinishing() || newsBox.getParent() == null || !pkg.equals(selected)) return;
+                        fillNews(newsBox, list, it);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /** Headlines from the Google News search feed: {title, link, source, date}. */
+    List<String[]> fetchNews(String label) throws Exception {
+        HttpURLConnection c = open("https://news.google.com/rss/search?q=" + enc(label)
+                + "&hl=ko&gl=KR&ceid=KR:ko");
+        List<String[]> list = new ArrayList<String[]>();
+        InputStream in = c.getInputStream();
+        try {
+            XmlPullParser xp = Xml.newPullParser();
+            xp.setInput(in, null);
+            String[] cur = null;
+            String tag = null;
+            int ev;
+            while ((ev = xp.next()) != XmlPullParser.END_DOCUMENT) {
+                if (ev == XmlPullParser.START_TAG) {
+                    tag = xp.getName();
+                    if ("item".equals(tag)) cur = new String[]{"", "", "", ""};
+                } else if (ev == XmlPullParser.TEXT) {
+                    if (cur != null && tag != null) {
+                        String t = xp.getText();
+                        if ("title".equals(tag)) cur[0] += t;
+                        else if ("link".equals(tag)) cur[1] += t;
+                        else if ("source".equals(tag)) cur[2] += t;
+                        else if ("pubDate".equals(tag)) cur[3] += t;
+                    }
+                } else if (ev == XmlPullParser.END_TAG) {
+                    if ("item".equals(xp.getName()) && cur != null) {
+                        cur[0] = cur[0].trim();
+                        cur[1] = cur[1].trim();
+                        cur[2] = cur[2].trim();
+                        String suffix = " - " + cur[2];
+                        if (cur[2].length() > 0 && cur[0].endsWith(suffix)) {
+                            cur[0] = cur[0].substring(0, cur[0].length() - suffix.length());
+                        }
+                        try {
+                            Date d = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)
+                                    .parse(cur[3].trim());
+                            cur[3] = new SimpleDateFormat("M월 d일", Locale.KOREA).format(d);
+                        } catch (Exception e) {
+                            cur[3] = "";
+                        }
+                        if (cur[0].length() > 0 && cur[1].length() > 0) list.add(cur);
+                        cur = null;
+                        if (list.size() >= 8) break;
+                    }
+                    tag = null;
+                }
+            }
+        } finally {
+            try {
+                in.close();
+            } catch (Exception ignored) {
+                // already closed
+            }
+            c.disconnect();
+        }
+        return list;
+    }
+
+    void fillNews(LinearLayout newsBox, List<String[]> list, final Item it) {
+        newsBox.removeAllViews();
+        if (list == null) {
+            newsBox.addView(text("뉴스를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.", 13, SUB, false));
+        } else if (list.isEmpty()) {
+            newsBox.addView(text("관련 뉴스가 없어요", 13, SUB, false));
+        } else {
+            for (int i = 0; i < list.size(); i++) {
+                final String[] n = list.get(i);
+                LinearLayout b = new LinearLayout(this);
+                b.setOrientation(LinearLayout.VERTICAL);
+                b.setBackground(box(CARD, 0, 14));
+                b.setPadding(dp(14), dp(12), dp(14), dp(12));
+                TextView t = text(n[0], 14, TEXT, false);
+                t.setMaxLines(2);
+                t.setEllipsize(TextUtils.TruncateAt.END);
+                b.addView(t);
+                String meta = n[2];
+                if (n[3].length() > 0) meta = meta.length() > 0 ? meta + " · " + n[3] : n[3];
+                TextView m = text(meta, 12, SUB, false);
+                m.setPadding(0, dp(4), 0, 0);
+                b.addView(m);
+                b.setClickable(true);
+                b.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        openUrl(n[1]);
+                    }
+                });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                lp.setMargins(0, 0, 0, dp(8));
+                newsBox.addView(b, lp);
+            }
+        }
+        TextView more = button("뉴스 더 보기", CARD, SUB);
+        more.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                openUrl("https://news.google.com/search?q=" + enc(it.label) + "&hl=ko&gl=KR&ceid=KR:ko");
+            }
+        });
+        newsBox.addView(more);
     }
 
     // ---------- data ----------
@@ -772,6 +1142,7 @@ public class MainActivity extends Activity {
         c.setConnectTimeout(10000);
         c.setReadTimeout(20000);
         c.setUseCaches(false);
+        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) GameManager");
         int code = c.getResponseCode();
         if (code != 200) {
             c.disconnect();
