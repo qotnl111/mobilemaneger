@@ -107,6 +107,11 @@ public class MainActivity extends Activity {
         long total;
         boolean played;
         boolean manual;
+        int cap;            // stamina cap, 0 = not tracked
+        double regen;       // minutes per point
+        long aTime;         // anchor: stamina was aVal at aTime
+        int aVal;
+        long autoAnchor;
         boolean[] done = new boolean[DAYS];
     }
 
@@ -274,6 +279,17 @@ public class MainActivity extends Activity {
         c.addView(pill, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        if (it.cap > 0) {
+            int sv = stamNow(it);
+            boolean full = sv >= it.cap;
+            TextView s1 = text("⚡ " + (sv < 0 ? "?" : String.valueOf(sv)) + " / " + it.cap, 13,
+                    full ? TODO : TEXT, true);
+            s1.setPadding(0, dp(8), 0, 0);
+            c.addView(s1);
+            String when = sv < 0 ? "기록 대기 중" : (full ? "가득 찼어요" : fmt(fullAt(it) - System.currentTimeMillis()) + " 뒤 가득");
+            c.addView(text(when, 11, full ? TODO : SUB, false));
+        }
+
         TextView lab = text("오늘", 11, SUB, false);
         lab.setPadding(0, dp(12), 0, 0);
         c.addView(lab);
@@ -332,7 +348,9 @@ public class MainActivity extends Activity {
                 public void onClick(View v) {
                     String k = "m:" + todayKey + ":" + it.pkg;
                     if (it.manual) prefs.edit().remove(k).apply();
-                    else prefs.edit().putBoolean(k, true).apply();
+                    else prefs.edit().putBoolean(k, true)
+                            .putLong("at:" + it.pkg, System.currentTimeMillis())
+                            .putInt("av:" + it.pkg, 0).apply();
                     refresh();
                 }
             });
@@ -522,6 +540,53 @@ public class MainActivity extends Activity {
         }
         detail.addView(chart);
 
+        TextView sh = text("스테미나", 15, TEXT, true);
+        sh.setPadding(0, dp(18), 0, dp(8));
+        detail.addView(sh);
+        if (it.cap <= 0) {
+            TextView setup = button("+ 스테미나 설정 (상한 · 회복 속도)", CARD, SUB);
+            setup.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    editStamina(it);
+                }
+            });
+            detail.addView(setup);
+        } else {
+            int sv = stamNow(it);
+            String msg;
+            if (sv < 0) {
+                msg = "아직 기준 기록이 없어요.\n플레이를 완료하거나 현재 값을 입력하면 계산을 시작해요.";
+            } else if (sv >= it.cap) {
+                msg = "가득 찼어요  " + it.cap + " / " + it.cap;
+            } else {
+                long fa = fullAt(it);
+                msg = "현재 약 " + sv + " / " + it.cap + "\n"
+                        + new SimpleDateFormat("M월 d일 a h:mm", Locale.KOREA).format(new Date(fa))
+                        + "에 가득 (" + fmt(fa - System.currentTimeMillis()) + " 뒤)";
+            }
+            TextView sb = text(msg, 14, sv >= it.cap ? TODO : TEXT, false);
+            sb.setLineSpacing(dp(4), 1f);
+            sb.setBackground(box(CARD, 0, 14));
+            sb.setPadding(dp(14), dp(12), dp(14), dp(12));
+            LinearLayout.LayoutParams sblp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            sblp.setMargins(0, 0, 0, dp(8));
+            detail.addView(sb, sblp);
+            TextView setNow = button("현재 값 입력", CARD, TEXT);
+            setNow.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    editStaminaNow(it);
+                }
+            });
+            TextView conf = button("상한 · 속도 설정", CARD, TEXT);
+            conf.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    editStamina(it);
+                }
+            });
+            detail.addView(linkRow(setNow, conf));
+        }
+
         // quick links
         TextView lh = text("바로가기", 15, TEXT, true);
         lh.setPadding(0, dp(18), 0, dp(8));
@@ -576,6 +641,105 @@ public class MainActivity extends Activity {
         newsBox.setOrientation(LinearLayout.VERTICAL);
         detail.addView(newsBox);
         loadNews(it, newsBox);
+    }
+
+    static int stamNow(Item it) {
+        if (it.cap <= 0 || it.regen <= 0 || it.aTime <= 0) return -1;
+        long gained = (long) ((System.currentTimeMillis() - it.aTime) / (it.regen * 60000.0));
+        long v = it.aVal + Math.max(0L, gained);
+        return (int) Math.max(0L, Math.min((long) it.cap, v));
+    }
+
+    static long fullAt(Item it) {
+        return it.aTime + (long) (Math.max(0, it.cap - it.aVal) * it.regen * 60000.0);
+    }
+
+    static double fill(Item it) {
+        int v = stamNow(it);
+        return v < 0 ? -1.0 : (double) v / (double) it.cap;
+    }
+
+    EditText numberField(String hint, String value, boolean decimal) {
+        EditText e = new EditText(this);
+        e.setInputType(InputType.TYPE_CLASS_NUMBER | (decimal ? InputType.TYPE_NUMBER_FLAG_DECIMAL : 0));
+        e.setHint(hint);
+        e.setText(value);
+        return e;
+    }
+
+    void editStamina(final Item it) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(4), dp(20), 0);
+        final EditText capIn = numberField("상한 (예: 240)", it.cap > 0 ? String.valueOf(it.cap) : "", false);
+        String rv = "";
+        if (it.regen > 0) {
+            rv = it.regen == Math.floor(it.regen) ? String.valueOf((long) it.regen) : String.valueOf(it.regen);
+        }
+        final EditText regIn = numberField("1 회복에 걸리는 분 (예: 6)", rv, true);
+        box.addView(text("상한", 12, SUB, false));
+        box.addView(capIn);
+        box.addView(text("1 회복에 걸리는 시간(분)", 12, SUB, false));
+        box.addView(regIn);
+        new AlertDialog.Builder(this)
+                .setTitle(it.label + " 스테미나")
+                .setMessage("플레이 완료 시점에 다 쓴 것으로 보고 계산해요. 상한을 비우면 표시를 꺼요.")
+                .setView(box)
+                .setPositiveButton("저장", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        int cap = 0;
+                        float reg = 0f;
+                        try {
+                            cap = Integer.parseInt(capIn.getText().toString().trim());
+                        } catch (Exception e) {
+                            cap = 0;
+                        }
+                        try {
+                            reg = Float.parseFloat(regIn.getText().toString().trim());
+                        } catch (Exception e) {
+                            reg = 0f;
+                        }
+                        if (cap <= 0) {
+                            prefs.edit().remove("sc:" + it.pkg).remove("sr:" + it.pkg).apply();
+                        } else if (reg <= 0f) {
+                            Toast.makeText(MainActivity.this, "회복 시간을 입력해 주세요", Toast.LENGTH_SHORT).show();
+                            return;
+                        } else {
+                            prefs.edit().putInt("sc:" + it.pkg, cap).putFloat("sr:" + it.pkg, reg).apply();
+                        }
+                        refresh();
+                    }
+                })
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
+    void editStaminaNow(final Item it) {
+        LinearLayout box = new LinearLayout(this);
+        box.setPadding(dp(20), dp(4), dp(20), 0);
+        final EditText in = numberField("0 ~ " + it.cap, "", false);
+        box.addView(in, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        new AlertDialog.Builder(this)
+                .setTitle("지금 스테미나")
+                .setMessage("게임에 보이는 현재 값을 넣으면 여기서부터 다시 계산해요.")
+                .setView(box)
+                .setPositiveButton("저장", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        int v;
+                        try {
+                            v = Integer.parseInt(in.getText().toString().trim());
+                        } catch (Exception e) {
+                            return;
+                        }
+                        v = Math.max(0, Math.min(it.cap, v));
+                        prefs.edit().putLong("at:" + it.pkg, System.currentTimeMillis())
+                                .putInt("av:" + it.pkg, v).apply();
+                        refresh();
+                    }
+                })
+                .setNegativeButton("취소", null)
+                .show();
     }
 
     void editLink(final Item it) {
@@ -821,7 +985,7 @@ public class MainActivity extends Activity {
     }
 
     /** Foreground time per tracked package between start and end. */
-    Map<String, Long> usage(long start, long end, Set<String> pkgs) {
+    Map<String, Long> usage(long start, long end, Set<String> pkgs, Map<String, Long> lastEnd) {
         Map<String, Long> total = new HashMap<String, Long>();
         if (end <= start) return total;
         UsageEvents ev = usm.queryEvents(start, end);
@@ -855,6 +1019,8 @@ public class MainActivity extends Activity {
                 }
                 seen.add(key);
                 if (from >= 0 && ts > from) add(total, pkg, ts - from);
+                Long le = lastEnd.get(pkg);
+                if (le == null || le.longValue() < ts) lastEnd.put(pkg, Long.valueOf(ts));
             }
         }
         long stop = Math.min(end, System.currentTimeMillis());
@@ -862,6 +1028,7 @@ public class MainActivity extends Activity {
             long from = en.getValue().longValue();
             String pkg = openPkg.get(en.getKey());
             if (pkg != null && stop > from) add(total, pkg, stop - from);
+            if (pkg != null) lastEnd.put(pkg, Long.valueOf(stop));
         }
         return total;
     }
@@ -934,9 +1101,10 @@ public class MainActivity extends Activity {
             long start = dayStart(d, key);
             long end = Math.min(start + DAY_MS, now);
             Map<String, Long> u = new HashMap<String, Long>();
+            Map<String, Long> le = new HashMap<String, Long>();
             if (access) {
                 try {
-                    u = usage(start, end, pkgs);
+                    u = usage(start, end, pkgs, le);
                 } catch (Exception e) {
                     // keep what was stored
                 }
@@ -945,6 +1113,10 @@ public class MainActivity extends Activity {
                 String k = "t:" + key[0] + ":" + p;
                 shownKeys.add(k);
                 long v = u.containsKey(p) ? u.get(p).longValue() : 0L;
+                if (v >= minMs() && le.containsKey(p)) {
+                    Item ai = map.get(p);
+                    ai.autoAnchor = Math.max(ai.autoAnchor, le.get(p).longValue());
+                }
                 Object old = stored.get(k);
                 long was = (old instanceof Long) ? ((Long) old).longValue() : 0L;
                 if (v > was) {
@@ -962,6 +1134,23 @@ public class MainActivity extends Activity {
                 it.days[d] = v;
                 it.week += v;
                 it.total += v;
+            }
+        }
+        // stamina: assume it was spent when a completed play day ended
+        for (String p : pkgs) {
+            Item it = map.get(p);
+            long savedAuto = prefs.getLong("aa:" + p, 0L);
+            if (it.autoAnchor > savedAuto) ed.putLong("aa:" + p, it.autoAnchor);
+            else it.autoAnchor = savedAuto;
+            it.cap = prefs.getInt("sc:" + p, 0);
+            it.regen = prefs.getFloat("sr:" + p, 0f);
+            long manT = prefs.getLong("at:" + p, 0L);
+            if (manT >= it.autoAnchor && manT > 0) {
+                it.aTime = manT;
+                it.aVal = prefs.getInt("av:" + p, 0);
+            } else {
+                it.aTime = it.autoAnchor;
+                it.aVal = 0;
             }
         }
         ed.apply();
@@ -985,6 +1174,8 @@ public class MainActivity extends Activity {
         Collections.sort(list, new Comparator<Item>() {
             public int compare(Item a, Item b) {
                 if (a.played != b.played) return a.played ? 1 : -1;   // not played first
+                double fa = fill(a), fb = fill(b);
+                if (fa != fb) return fa > fb ? -1 : 1;                // fuller stamina first
                 return a.label.compareToIgnoreCase(b.label);
             }
         });
