@@ -379,7 +379,7 @@ public class MainActivity extends Activity {
     }
 
     int resetHour() {
-        return prefs.getInt("resetHour", 0);
+        return prefs.getInt("resetHour", 4);
     }
 
     Set<String> tracked() {
@@ -542,6 +542,17 @@ public class MainActivity extends Activity {
                 it.label = p + " (삭제됨)";
             }
             map.put(p, it);
+        }
+
+        // the day boundary moved: recount the visible week with the new boundary
+        if (access && prefs.getInt("keyHour", 0) != resetHour()) {
+            SharedPreferences.Editor clr = prefs.edit();
+            for (int d = 0; d < DAYS; d++) {
+                String[] key = new String[1];
+                dayStart(d, key);
+                for (String p : pkgs) clr.remove("t:" + key[0] + ":" + p);
+            }
+            clr.putInt("keyHour", resetHour()).commit();
         }
 
         Map<String, ?> stored = prefs.getAll();
