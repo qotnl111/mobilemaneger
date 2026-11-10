@@ -3,6 +3,7 @@ package app.gamelog.tracker;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.AppOpsManager;
+import android.app.DatePickerDialog;
 import android.app.PendingIntent;
 import android.app.usage.UsageEvents;
 import android.app.usage.UsageStatsManager;
@@ -33,6 +34,7 @@ import android.util.Xml;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.DatePicker;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
@@ -113,6 +115,8 @@ public class MainActivity extends Activity {
         long aTime;         // anchor: stamina was aVal at aTime
         int aVal;
         long autoAnchor;
+        long upd;           // next game update day (local midnight), 0 = none
+        int updCycle;       // repeat every N days, 0 = one-off
         boolean[] done = new boolean[DAYS];
     }
 
@@ -289,6 +293,13 @@ public class MainActivity extends Activity {
             c.addView(s1);
             String when = sv < 0 ? "기록 대기 중" : (full ? "가득 찼어요" : fmt(fullAt(it) - System.currentTimeMillis()) + " 뒤 가득");
             c.addView(text(when, 11, full ? TODO : SUB, false));
+        }
+
+        if (it.upd > 0) {
+            long du = daysUntil(it.upd);
+            TextView ut = text(updShort(du), 11, du >= 0 && du <= 1 ? TODO : SUB, du >= 0 && du <= 1);
+            ut.setPadding(0, dp(6), 0, 0);
+            c.addView(ut);
         }
 
         TextView lab = text("오늘", 11, SUB, false);
@@ -588,6 +599,38 @@ public class MainActivity extends Activity {
             detail.addView(linkRow(setNow, conf));
         }
 
+        // game update day
+        TextView uh = text("업데이트 날짜", 15, TEXT, true);
+        uh.setPadding(0, dp(10), 0, dp(8));
+        detail.addView(uh);
+        if (it.upd > 0) {
+            long du = daysUntil(it.upd);
+            String um = new SimpleDateFormat("M월 d일 (E)", Locale.KOREA).format(new Date(it.upd))
+                    + " · " + updShort(du).replace("업데이트 ", "");
+            if (it.updCycle > 0) um += "\n" + it.updCycle + "일마다 반복";
+            TextView ub = text(um, 14, du >= 0 && du <= 1 ? TODO : TEXT, false);
+            ub.setLineSpacing(dp(4), 1f);
+            ub.setBackground(box(CARD, 0, 14));
+            ub.setPadding(dp(14), dp(12), dp(14), dp(12));
+            LinearLayout.LayoutParams ublp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            ublp.setMargins(0, 0, 0, dp(8));
+            detail.addView(ub, ublp);
+        }
+        TextView pick = button(it.upd > 0 ? "날짜 변경" : "+ 날짜 등록", CARD, it.upd > 0 ? TEXT : SUB);
+        pick.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                pickUpdateDate(it);
+            }
+        });
+        TextView cyc = button(it.upd > 0 ? "반복 · 지우기" : "반복 주기", CARD, it.upd > 0 ? TEXT : SUB);
+        cyc.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                editUpdateCycle(it);
+            }
+        });
+        detail.addView(linkRow(pick, cyc));
+
         // quick links
         TextView lh = text("바로가기", 15, TEXT, true);
         lh.setPadding(0, dp(18), 0, dp(8));
@@ -777,6 +820,74 @@ public class MainActivity extends Activity {
                 })
                 .setNegativeButton("취소", null)
                 .show();
+    }
+
+    static long todayMidnight() {
+        Calendar c = Calendar.getInstance();
+        c.set(Calendar.HOUR_OF_DAY, 0);
+        c.set(Calendar.MINUTE, 0);
+        c.set(Calendar.SECOND, 0);
+        c.set(Calendar.MILLISECOND, 0);
+        return c.getTimeInMillis();
+    }
+
+    static long daysUntil(long day) {
+        return Math.round((day - todayMidnight()) / (double) DAY_MS);
+    }
+
+    static String updShort(long du) {
+        if (du == 0) return "업데이트 오늘!";
+        if (du > 0) return "업데이트 D-" + du;
+        return "업데이트 " + (-du) + "일 지남";
+    }
+
+    void pickUpdateDate(final Item it) {
+        Calendar c = Calendar.getInstance();
+        if (it.upd > 0) c.setTimeInMillis(it.upd);
+        new DatePickerDialog(this, new DatePickerDialog.OnDateSetListener() {
+            public void onDateSet(DatePicker view, int y, int m, int d) {
+                Calendar n = Calendar.getInstance();
+                n.clear();
+                n.set(y, m, d, 0, 0, 0);
+                prefs.edit().putLong("ud:" + it.pkg, n.getTimeInMillis()).apply();
+                refresh();
+            }
+        }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show();
+    }
+
+    void editUpdateCycle(final Item it) {
+        LinearLayout box = new LinearLayout(this);
+        box.setPadding(dp(20), dp(4), dp(20), 0);
+        final EditText in = numberField("예: 42 (6주)", it.updCycle > 0 ? String.valueOf(it.updCycle) : "", false);
+        box.addView(in, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle(it.label + " 업데이트 반복")
+                .setMessage("며칠마다 업데이트되는지 넣으면 날짜가 지났을 때 다음 날짜로 자동으로 넘어가요. 비우면 반복하지 않아요.")
+                .setView(box)
+                .setPositiveButton("저장", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        int n = 0;
+                        try {
+                            n = Integer.parseInt(in.getText().toString().trim());
+                        } catch (Exception e) {
+                            n = 0;
+                        }
+                        if (n > 0) prefs.edit().putInt("uc:" + it.pkg, n).apply();
+                        else prefs.edit().remove("uc:" + it.pkg).apply();
+                        refresh();
+                    }
+                })
+                .setNegativeButton("취소", null);
+        if (it.upd > 0) {
+            b.setNeutralButton("날짜 지우기", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int which) {
+                    prefs.edit().remove("ud:" + it.pkg).apply();
+                    refresh();
+                }
+            });
+        }
+        b.show();
     }
 
     void editLink(final Item it) {
@@ -1182,6 +1293,17 @@ public class MainActivity extends Activity {
             it.cap = prefs.getInt("sc:" + p, 0);
             it.regen = prefs.getFloat("sr:" + p, 0f);
             it.daily = prefs.getInt("sd:" + p, -1);
+            it.upd = prefs.getLong("ud:" + p, 0L);
+            it.updCycle = prefs.getInt("uc:" + p, 0);
+            if (it.upd > 0 && it.updCycle > 0 && it.upd < todayMidnight()) {
+                Calendar uc = Calendar.getInstance();
+                uc.setTimeInMillis(it.upd);
+                long tm = todayMidnight();
+                int guard = 0;
+                while (uc.getTimeInMillis() < tm && guard++ < 5000) uc.add(Calendar.DAY_OF_YEAR, it.updCycle);
+                it.upd = uc.getTimeInMillis();
+                ed.putLong("ud:" + p, it.upd);
+            }
             long manT = prefs.getLong("at:" + p, 0L);
             if (manT >= it.autoAnchor && manT > 0) {
                 it.aTime = manT;

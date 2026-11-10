@@ -1,6 +1,6 @@
 {
-  "versionCode": 7,
-  "versionName": "1.6",
+  "versionCode": 8,
+  "versionName": "1.7",
   "apk": "game-manager.apk",
-  "notes": "스테미나: 하루 한 번 통째로 회복되는 게임 지원 (회복 시각 설정)"
+  "notes": "게임별 업데이트 날짜 등록과 D-day 표시, 반복 주기 지원"
 }
