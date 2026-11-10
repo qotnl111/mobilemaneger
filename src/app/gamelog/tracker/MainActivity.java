@@ -108,7 +108,8 @@ public class MainActivity extends Activity {
         boolean played;
         boolean manual;
         int cap;            // stamina cap, 0 = not tracked
-        double regen;       // minutes per point
+        double regen;       // minutes per point, 0 = no gradual refill
+        int daily = -1;     // hour of a full daily refill, -1 = none
         long aTime;         // anchor: stamina was aVal at aTime
         int aVal;
         long autoAnchor;
@@ -643,15 +644,37 @@ public class MainActivity extends Activity {
         loadNews(it, newsBox);
     }
 
+    /** First daily refill moment after the anchor, or 0 when the game has none. */
+    static long nextDaily(Item it) {
+        if (it.daily < 0) return 0L;
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(it.aTime);
+        c.set(Calendar.HOUR_OF_DAY, it.daily);
+        c.set(Calendar.MINUTE, 0);
+        c.set(Calendar.SECOND, 0);
+        c.set(Calendar.MILLISECOND, 0);
+        if (c.getTimeInMillis() <= it.aTime) c.add(Calendar.DAY_OF_YEAR, 1);
+        return c.getTimeInMillis();
+    }
+
     static int stamNow(Item it) {
-        if (it.cap <= 0 || it.regen <= 0 || it.aTime <= 0) return -1;
-        long gained = (long) ((System.currentTimeMillis() - it.aTime) / (it.regen * 60000.0));
-        long v = it.aVal + Math.max(0L, gained);
+        if (it.cap <= 0 || it.aTime <= 0 || (it.regen <= 0 && it.daily < 0)) return -1;
+        long now = System.currentTimeMillis();
+        long nd = nextDaily(it);
+        if (nd > 0 && now >= nd) return it.cap;
+        long v = it.aVal;
+        if (it.regen > 0) v += Math.max(0L, (long) ((now - it.aTime) / (it.regen * 60000.0)));
         return (int) Math.max(0L, Math.min((long) it.cap, v));
     }
 
     static long fullAt(Item it) {
-        return it.aTime + (long) (Math.max(0, it.cap - it.aVal) * it.regen * 60000.0);
+        long best = Long.MAX_VALUE;
+        if (it.regen > 0) {
+            best = it.aTime + (long) (Math.max(0, it.cap - it.aVal) * it.regen * 60000.0);
+        }
+        long nd = nextDaily(it);
+        if (nd > 0) best = Math.min(best, nd);
+        return best;
     }
 
     static double fill(Item it) {
@@ -679,11 +702,14 @@ public class MainActivity extends Activity {
         final EditText regIn = numberField("1 회복에 걸리는 분 (예: 6)", rv, true);
         box.addView(text("상한", 12, SUB, false));
         box.addView(capIn);
-        box.addView(text("1 회복에 걸리는 시간(분)", 12, SUB, false));
+        final EditText dayIn = numberField("0 ~ 23 (예: 4)", it.daily >= 0 ? String.valueOf(it.daily) : "", false);
+        box.addView(text("1 회복에 걸리는 시간(분) · 조금씩 안 차면 비우기", 12, SUB, false));
         box.addView(regIn);
+        box.addView(text("매일 통째로 회복되는 시각(시) · 없으면 비우기", 12, SUB, false));
+        box.addView(dayIn);
         new AlertDialog.Builder(this)
                 .setTitle(it.label + " 스테미나")
-                .setMessage("플레이 완료 시점에 다 쓴 것으로 보고 계산해요. 상한을 비우면 표시를 꺼요.")
+                .setMessage("플레이 완료 시점에 다 쓴 것으로 보고 계산해요. 조금씩 차는 게임은 회복 시간을, 하루 한 번 통째로 차는 게임은 회복 시각을 넣으세요. 둘 다 넣어도 돼요. 상한을 비우면 표시를 꺼요.")
                 .setView(box)
                 .setPositiveButton("저장", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int which) {
@@ -699,13 +725,24 @@ public class MainActivity extends Activity {
                         } catch (Exception e) {
                             reg = 0f;
                         }
+                        int day = -1;
+                        try {
+                            day = Integer.parseInt(dayIn.getText().toString().trim());
+                        } catch (Exception e) {
+                            day = -1;
+                        }
+                        if (day > 23) day = -1;
+                        if (reg < 0f) reg = 0f;
                         if (cap <= 0) {
-                            prefs.edit().remove("sc:" + it.pkg).remove("sr:" + it.pkg).apply();
-                        } else if (reg <= 0f) {
-                            Toast.makeText(MainActivity.this, "회복 시간을 입력해 주세요", Toast.LENGTH_SHORT).show();
+                            prefs.edit().remove("sc:" + it.pkg).remove("sr:" + it.pkg)
+                                    .remove("sd:" + it.pkg).apply();
+                        } else if (reg <= 0f && day < 0) {
+                            Toast.makeText(MainActivity.this, "회복 시간이나 매일 회복 시각 중 하나는 넣어 주세요",
+                                    Toast.LENGTH_LONG).show();
                             return;
                         } else {
-                            prefs.edit().putInt("sc:" + it.pkg, cap).putFloat("sr:" + it.pkg, reg).apply();
+                            prefs.edit().putInt("sc:" + it.pkg, cap).putFloat("sr:" + it.pkg, reg)
+                                    .putInt("sd:" + it.pkg, day).apply();
                         }
                         refresh();
                     }
@@ -1144,6 +1181,7 @@ public class MainActivity extends Activity {
             else it.autoAnchor = savedAuto;
             it.cap = prefs.getInt("sc:" + p, 0);
             it.regen = prefs.getFloat("sr:" + p, 0f);
+            it.daily = prefs.getInt("sd:" + p, -1);
             long manT = prefs.getLong("at:" + p, 0L);
             if (manT >= it.autoAnchor && manT > 0) {
                 it.aTime = manT;
