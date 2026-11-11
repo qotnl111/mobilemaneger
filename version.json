@@ -1,6 +1,6 @@
 {
-  "versionCode": 9,
-  "versionName": "1.8",
+  "versionCode": 10,
+  "versionName": "1.9",
   "apk": "game-manager.apk",
-  "notes": "업데이트 날짜에 시간도 지정 가능, 24시간 이내면 남은 시간 표시"
+  "notes": "완료된 게임에 미완료 처리 버튼 추가"
 }

@@ -354,26 +354,37 @@ public class MainActivity extends Activity {
         runlp.setMargins(0, dp(12), 0, 0);
         c.addView(run, runlp);
 
-        if (it.days[0] < minMs()) {
-            TextView mark = button(it.manual ? "완료 취소" : "완료 처리",
-                    it.manual ? LINE : 0x224ADE80, it.manual ? SUB : DONE);
-            mark.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-            mark.setPadding(dp(8), dp(9), dp(8), dp(9));
-            mark.setOnClickListener(new View.OnClickListener() {
-                public void onClick(View v) {
-                    String k = "m:" + todayKey + ":" + it.pkg;
-                    if (it.manual) prefs.edit().remove(k).apply();
-                    else prefs.edit().putBoolean(k, true)
-                            .putLong("at:" + it.pkg, System.currentTimeMillis())
-                            .putInt("av:" + it.pkg, 0).apply();
-                    refresh();
+        TextView mark = button(it.played ? "미완료 처리" : "완료 처리",
+                it.played ? LINE : 0x224ADE80, it.played ? SUB : DONE);
+        mark.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        mark.setPadding(dp(8), dp(9), dp(8), dp(9));
+        mark.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                String mk = "m:" + todayKey + ":" + it.pkg;
+                String xk = "x:" + todayKey + ":" + it.pkg;
+                boolean auto = it.days[0] >= minMs();
+                SharedPreferences.Editor e = prefs.edit();
+                if (it.played) {
+                    // back to not done; forget today's "stamina spent" assumption
+                    e.remove(mk).remove("aa:" + it.pkg);
+                    if (it.manual) e.remove("at:" + it.pkg).remove("av:" + it.pkg);
+                    if (auto) e.putBoolean(xk, true);
+                } else {
+                    e.remove(xk);
+                    if (!auto) {
+                        e.putBoolean(mk, true)
+                                .putLong("at:" + it.pkg, System.currentTimeMillis())
+                                .putInt("av:" + it.pkg, 0);
+                    }
                 }
-            });
-            LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            mlp.setMargins(0, dp(8), 0, 0);
-            c.addView(mark, mlp);
-        }
+                e.apply();
+                refresh();
+            }
+        });
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        mlp.setMargins(0, dp(8), 0, 0);
+        c.addView(mark, mlp);
 
         c.setClickable(true);
         c.setOnClickListener(new View.OnClickListener() {
@@ -1293,7 +1304,8 @@ public class MainActivity extends Activity {
                 String k = "t:" + key[0] + ":" + p;
                 shownKeys.add(k);
                 long v = u.containsKey(p) ? u.get(p).longValue() : 0L;
-                if (v >= minMs() && le.containsKey(p)) {
+                if (v >= minMs() && le.containsKey(p)
+                        && !Boolean.TRUE.equals(stored.get("x:" + key[0] + ":" + p))) {
                     Item ai = map.get(p);
                     ai.autoAnchor = Math.max(ai.autoAnchor, le.get(p).longValue());
                 }
@@ -1306,7 +1318,8 @@ public class MainActivity extends Activity {
                 }
                 Item it = map.get(p);
                 boolean man = Boolean.TRUE.equals(stored.get("m:" + key[0] + ":" + p));
-                it.done[d] = v >= minMs() || man;
+                boolean no = Boolean.TRUE.equals(stored.get("x:" + key[0] + ":" + p));   // marked not done by hand
+                it.done[d] = !no && (v >= minMs() || man);
                 if (d == 0) {
                     it.manual = man;
                     todayKey = key[0];
