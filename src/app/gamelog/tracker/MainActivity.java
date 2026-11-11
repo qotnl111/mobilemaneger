@@ -735,6 +735,14 @@ public class MainActivity extends Activity {
         return best;
     }
 
+    /** Time left until stamina is full; games without stamina data sort last. */
+    static long untilFull(Item it, long now) {
+        int v = stamNow(it);
+        if (v < 0) return Long.MAX_VALUE;
+        if (v >= it.cap) return 0L;
+        return Math.max(0L, fullAt(it) - now);
+    }
+
     static double fill(Item it) {
         int v = stamNow(it);
         return v < 0 ? -1.0 : (double) v / (double) it.cap;
@@ -1377,11 +1385,18 @@ public class MainActivity extends Activity {
             Item it = list.get(i);
             it.played = it.done[0];
         }
+        final int sortMode = prefs.getInt("sortMode", 1);
+        final long sortNow = System.currentTimeMillis();
         Collections.sort(list, new Comparator<Item>() {
             public int compare(Item a, Item b) {
                 if (a.played != b.played) return a.played ? 1 : -1;   // not played first
-                double fa = fill(a), fb = fill(b);
-                if (fa != fb) return fa > fb ? -1 : 1;                // fuller stamina first
+                if (sortMode == 1) {
+                    long ta = untilFull(a, sortNow), tb = untilFull(b, sortNow);
+                    if (ta != tb) return ta < tb ? -1 : 1;            // soonest full first
+                } else {
+                    double fa = fill(a), fb = fill(b);
+                    if (fa != fb) return fa > fb ? -1 : 1;            // fuller stamina first
+                }
                 return a.label.compareToIgnoreCase(b.label);
             }
         });
@@ -1404,6 +1419,7 @@ public class MainActivity extends Activity {
                 "게임 여러 개 빼기",
                 "자동 완료 기준: " + minMin() + "분 이상",
                 "하루 시작: " + resetHour() + "시",
+                "정렬: " + (prefs.getInt("sortMode", 1) == 1 ? "가득까지 남은 시간 짧은 순" : "스테미나 많이 찬 순"),
                 "업데이트 확인 (현재 v" + myVersionName() + ")"
         };
         new AlertDialog.Builder(this)
@@ -1414,6 +1430,7 @@ public class MainActivity extends Activity {
                         else if (which == 1) showRemoveDialog();
                         else if (which == 2) showMinDialog();
                         else if (which == 3) showResetDialog();
+                        else if (which == 4) showSortDialog();
                         else checkUpdate();
                     }
                 })
@@ -1480,6 +1497,21 @@ public class MainActivity extends Activity {
                 .setSingleChoiceItems(names, cur, new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int which) {
                         prefs.edit().putInt("minMin", MIN_OPTIONS[which]).apply();
+                        d.dismiss();
+                        refresh();
+                    }
+                })
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
+    void showSortDialog() {
+        CharSequence[] names = {"스테미나 많이 찬 순 (비율)", "가득까지 남은 시간 짧은 순"};
+        new AlertDialog.Builder(this)
+                .setTitle("정렬 기준 (안 한 게임이 항상 먼저)")
+                .setSingleChoiceItems(names, prefs.getInt("sortMode", 1), new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        prefs.edit().putInt("sortMode", which).apply();
                         d.dismiss();
                         refresh();
                     }

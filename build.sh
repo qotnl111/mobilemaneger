@@ -5,7 +5,7 @@ cd /home/claude/gamelog
 rm -rf out && mkdir -p out/classes out/apk
 $T/aapt2_64 compile --dir res -o out/res.zip
 $T/aapt2_64 link -o out/base.apk -I $T/android.jar --manifest AndroidManifest.xml \
-  --min-sdk-version 26 --target-sdk-version 33 --version-code 10 --version-name 1.9 out/res.zip
+  --min-sdk-version 26 --target-sdk-version 33 --version-code 11 --version-name 1.10 out/res.zip
 javac -source 8 -target 8 -encoding UTF-8 -Xlint:-options -bootclasspath $T/android.jar \
   -d out/classes $(find src -name '*.java')
 java -cp $T/dx-30.0.2.jar com.android.dx.command.Main --dex --min-sdk-version=26 \

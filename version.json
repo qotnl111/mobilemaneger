@@ -1,6 +1,6 @@
 {
-  "versionCode": 10,
-  "versionName": "1.9",
+  "versionCode": 11,
+  "versionName": "1.10",
   "apk": "game-manager.apk",
-  "notes": "완료된 게임에 미완료 처리 버튼 추가"
+  "notes": "설정에 정렬 기준 추가: 가득까지 남은 시간 짧은 순(기본) / 스테미나 많이 찬 순"
 }
