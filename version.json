@@ -1,6 +1,6 @@
 {
-  "versionCode": 8,
-  "versionName": "1.7",
+  "versionCode": 9,
+  "versionName": "1.8",
   "apk": "game-manager.apk",
-  "notes": "게임별 업데이트 날짜 등록과 D-day 표시, 반복 주기 지원"
+  "notes": "업데이트 날짜에 시간도 지정 가능, 24시간 이내면 남은 시간 표시"
 }

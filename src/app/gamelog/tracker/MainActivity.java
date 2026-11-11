@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.app.AppOpsManager;
 import android.app.DatePickerDialog;
 import android.app.PendingIntent;
+import android.app.TimePickerDialog;
 import android.app.usage.UsageEvents;
 import android.app.usage.UsageStatsManager;
 import android.content.Context;
@@ -42,6 +43,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.TimePicker;
 import android.widget.Toast;
 
 import java.io.ByteArrayOutputStream;
@@ -117,6 +119,7 @@ public class MainActivity extends Activity {
         long autoAnchor;
         long upd;           // next game update day (local midnight), 0 = none
         int updCycle;       // repeat every N days, 0 = one-off
+        boolean updTime;    // upd carries a time of day
         boolean[] done = new boolean[DAYS];
     }
 
@@ -297,7 +300,7 @@ public class MainActivity extends Activity {
 
         if (it.upd > 0) {
             long du = daysUntil(it.upd);
-            TextView ut = text(updShort(du), 11, du >= 0 && du <= 1 ? TODO : SUB, du >= 0 && du <= 1);
+            TextView ut = text(updText(it.upd, it.updTime), 11, du >= 0 && du <= 1 ? TODO : SUB, du >= 0 && du <= 1);
             ut.setPadding(0, dp(6), 0, 0);
             c.addView(ut);
         }
@@ -605,8 +608,9 @@ public class MainActivity extends Activity {
         detail.addView(uh);
         if (it.upd > 0) {
             long du = daysUntil(it.upd);
-            String um = new SimpleDateFormat("M월 d일 (E)", Locale.KOREA).format(new Date(it.upd))
-                    + " · " + updShort(du).replace("업데이트 ", "");
+            String um = new SimpleDateFormat(it.updTime ? "M월 d일 (E) a h:mm" : "M월 d일 (E)", Locale.KOREA)
+                    .format(new Date(it.upd))
+                    + " · " + updText(it.upd, it.updTime).replace("업데이트 ", "");
             if (it.updCycle > 0) um += "\n" + it.updCycle + "일마다 반복";
             TextView ub = text(um, 14, du >= 0 && du <= 1 ? TODO : TEXT, false);
             ub.setLineSpacing(dp(4), 1f);
@@ -831,26 +835,54 @@ public class MainActivity extends Activity {
         return c.getTimeInMillis();
     }
 
-    static long daysUntil(long day) {
-        return Math.round((day - todayMidnight()) / (double) DAY_MS);
+    static long daysUntil(long when) {
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(when);
+        c.set(Calendar.HOUR_OF_DAY, 0);
+        c.set(Calendar.MINUTE, 0);
+        c.set(Calendar.SECOND, 0);
+        c.set(Calendar.MILLISECOND, 0);
+        return Math.round((c.getTimeInMillis() - todayMidnight()) / (double) DAY_MS);
     }
 
-    static String updShort(long du) {
+    static String updText(long upd, boolean hasTime) {
+        long du = daysUntil(upd);
+        long now = System.currentTimeMillis();
+        if (hasTime) {
+            if (now < upd && upd - now < DAY_MS) return "업데이트 " + fmt(upd - now) + " 뒤";
+            if (now >= upd && du == 0) return "업데이트 오늘 완료";
+        }
         if (du == 0) return "업데이트 오늘!";
         if (du > 0) return "업데이트 D-" + du;
         return "업데이트 " + (-du) + "일 지남";
     }
 
     void pickUpdateDate(final Item it) {
-        Calendar c = Calendar.getInstance();
+        final Calendar c = Calendar.getInstance();
         if (it.upd > 0) c.setTimeInMillis(it.upd);
+        final int oldH = it.updTime ? c.get(Calendar.HOUR_OF_DAY) : 12;
+        final int oldM = it.updTime ? c.get(Calendar.MINUTE) : 0;
         new DatePickerDialog(this, new DatePickerDialog.OnDateSetListener() {
-            public void onDateSet(DatePicker view, int y, int m, int d) {
+            public void onDateSet(DatePicker view, final int y, final int m, final int d) {
                 Calendar n = Calendar.getInstance();
                 n.clear();
                 n.set(y, m, d, 0, 0, 0);
-                prefs.edit().putLong("ud:" + it.pkg, n.getTimeInMillis()).apply();
+                prefs.edit().putLong("ud:" + it.pkg, n.getTimeInMillis())
+                        .putBoolean("ut:" + it.pkg, false).apply();
                 refresh();
+                TimePickerDialog tp = new TimePickerDialog(MainActivity.this,
+                        new TimePickerDialog.OnTimeSetListener() {
+                            public void onTimeSet(TimePicker tv, int h, int min) {
+                                Calendar t = Calendar.getInstance();
+                                t.clear();
+                                t.set(y, m, d, h, min, 0);
+                                prefs.edit().putLong("ud:" + it.pkg, t.getTimeInMillis())
+                                        .putBoolean("ut:" + it.pkg, true).apply();
+                                refresh();
+                            }
+                        }, oldH, oldM, false);
+                tp.setTitle("업데이트 시간 (취소하면 날짜만 저장)");
+                tp.show();
             }
         }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show();
     }
@@ -882,7 +914,7 @@ public class MainActivity extends Activity {
         if (it.upd > 0) {
             b.setNeutralButton("날짜 지우기", new DialogInterface.OnClickListener() {
                 public void onClick(DialogInterface d, int which) {
-                    prefs.edit().remove("ud:" + it.pkg).apply();
+                    prefs.edit().remove("ud:" + it.pkg).remove("ut:" + it.pkg).apply();
                     refresh();
                 }
             });
@@ -1295,6 +1327,7 @@ public class MainActivity extends Activity {
             it.daily = prefs.getInt("sd:" + p, -1);
             it.upd = prefs.getLong("ud:" + p, 0L);
             it.updCycle = prefs.getInt("uc:" + p, 0);
+            it.updTime = prefs.getBoolean("ut:" + p, false);
             if (it.upd > 0 && it.updCycle > 0 && it.upd < todayMidnight()) {
                 Calendar uc = Calendar.getInstance();
                 uc.setTimeInMillis(it.upd);
