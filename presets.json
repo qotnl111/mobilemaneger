@@ -1,0 +1,111 @@
+{
+ "format": 1,
+ "minMin": 3,
+ "resetHour": 4,
+ "sortMode": 1,
+ "games": [
+  {
+   "pkg": "com.HoYoverse.Nap",
+   "name": "젠레스 존 제로",
+   "cap": 240,
+   "regen": 6,
+   "daily": -1
+  },
+  {
+   "pkg": "com.ProjectMoon.LimbusCompany",
+   "name": "LimbusCompany",
+   "cap": 139,
+   "regen": 6,
+   "daily": -1,
+   "upd": 1794445200000,
+   "updTime": true,
+   "updDur": 50400000
+  },
+  {
+   "pkg": "com.bandainamcoent.op_restaurant",
+   "name": "원피스 그랜드 레스토랑"
+  },
+  {
+   "pkg": "com.garena.game.mho",
+   "name": "MHOutlanders",
+   "cap": 120,
+   "regen": 12,
+   "daily": -1
+  },
+  {
+   "pkg": "com.gryphline.endfield.glx",
+   "name": "명일방주:엔드필드",
+   "cap": 360,
+   "regen": 7.12,
+   "daily": -1
+  },
+  {
+   "pkg": "com.hottagames.nte",
+   "name": "이환"
+  },
+  {
+   "pkg": "com.kakaogames.gdtskr",
+   "name": "가디언 테일즈",
+   "cap": 89,
+   "regen": 10,
+   "daily": -1
+  },
+  {
+   "pkg": "com.kakaogames.umamusume",
+   "name": "우마무스메",
+   "cap": 100,
+   "regen": 6,
+   "daily": -1,
+   "upd": 1794927600000,
+   "updTime": false,
+   "updDur": 0,
+   "updCycle": 7
+  },
+  {
+   "pkg": "com.kurogame.wutheringwaves.global",
+   "name": "명조:워더링 웨이브",
+   "cap": 240,
+   "regen": 6,
+   "daily": -1
+  },
+  {
+   "pkg": "com.neowizgames.game.browndust2",
+   "name": "BrownDust II",
+   "cap": 60,
+   "regen": 0,
+   "daily": 9
+  },
+  {
+   "pkg": "com.p5xkr.samsung",
+   "name": "페르소나5: 더 팬텀 X",
+   "cap": 240,
+   "regen": 6,
+   "daily": -1,
+   "upd": 1794409200000,
+   "updTime": false,
+   "updDur": 0
+  },
+  {
+   "pkg": "com.qookkagames.z1.gp.hk",
+   "name": "Morimens"
+  },
+  {
+   "pkg": "com.stove.epic7.google",
+   "name": "에픽세븐"
+  },
+  {
+   "pkg": "com.xd.ssrpgkr",
+   "name": "소드 오브 콘발라리아",
+   "cap": 240,
+   "regen": 6,
+   "daily": -1
+  },
+  {
+   "pkg": "com.zlongame.kr.langrisser",
+   "name": "랑그릿사",
+   "cap": 200,
+   "regen": 5,
+   "daily": -1
+  }
+ ]
+}
