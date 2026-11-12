@@ -1,6 +1,6 @@
 {
-  "versionCode": 15,
-  "versionName": "1.14",
+  "versionCode": 16,
+  "versionName": "1.15",
   "apk": "game-manager.apk",
-  "notes": "편집 모드 추가: 제목 옆 편집 버튼으로 게임 여러 개를 골라 한 번에 목록에서 제거"
+  "notes": "Play 프로텍트 차단 대응: 부팅 시 자동 실행 권한 제거"
 }
