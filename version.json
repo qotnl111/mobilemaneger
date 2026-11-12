@@ -1,6 +1,6 @@
 {
-  "versionCode": 12,
-  "versionName": "1.11",
+  "versionCode": 13,
+  "versionName": "1.12",
   "apk": "game-manager.apk",
-  "notes": "업데이트 시간을 시작~끝으로 지정 가능, 진행 중이면 끝까지 남은 시간 표시"
+  "notes": "설정 내보내기·가져오기, 저장소에서 설정 받기 추가"
 }

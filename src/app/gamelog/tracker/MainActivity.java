@@ -8,6 +8,8 @@ import android.app.PendingIntent;
 import android.app.TimePickerDialog;
 import android.app.usage.UsageEvents;
 import android.app.usage.UsageStatsManager;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -66,6 +68,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.xmlpull.v1.XmlPullParser;
 
@@ -1459,6 +1462,9 @@ public class MainActivity extends Activity {
                 "자동 완료 기준: " + minMin() + "분 이상",
                 "하루 시작: " + resetHour() + "시",
                 "정렬: " + (prefs.getInt("sortMode", 1) == 1 ? "가득까지 남은 시간 짧은 순" : "스테미나 많이 찬 순"),
+                "설정 내보내기",
+                "설정 가져오기 (붙여넣기)",
+                "저장소에서 설정 받기",
                 "업데이트 확인 (현재 v" + myVersionName() + ")"
         };
         new AlertDialog.Builder(this)
@@ -1470,6 +1476,9 @@ public class MainActivity extends Activity {
                         else if (which == 2) showMinDialog();
                         else if (which == 3) showResetDialog();
                         else if (which == 4) showSortDialog();
+                        else if (which == 5) showExport();
+                        else if (which == 6) showImport();
+                        else if (which == 7) fetchPresets();
                         else checkUpdate();
                     }
                 })
@@ -1542,6 +1551,197 @@ public class MainActivity extends Activity {
                 })
                 .setNegativeButton("취소", null)
                 .show();
+    }
+
+    // ---------- export / import ----------
+
+    String exportJson(boolean withLinks) throws Exception {
+        JSONObject o = new JSONObject();
+        o.put("format", 1);
+        o.put("minMin", minMin());
+        o.put("resetHour", resetHour());
+        o.put("sortMode", prefs.getInt("sortMode", 1));
+        JSONArray arr = new JSONArray();
+        List<String> pkgs = new ArrayList<String>(tracked());
+        Collections.sort(pkgs);
+        for (int i = 0; i < pkgs.size(); i++) {
+            String p = pkgs.get(i);
+            JSONObject g = new JSONObject();
+            g.put("pkg", p);
+            try {
+                g.put("name", String.valueOf(pm.getApplicationLabel(pm.getApplicationInfo(p, 0))));
+            } catch (Exception e) {
+                // not installed any more; the package id is enough
+            }
+            int cap = prefs.getInt("sc:" + p, 0);
+            if (cap > 0) {
+                g.put("cap", cap);
+                g.put("regen", Math.round(prefs.getFloat("sr:" + p, 0f) * 1000.0) / 1000.0);
+                g.put("daily", prefs.getInt("sd:" + p, -1));
+            }
+            long ud = prefs.getLong("ud:" + p, 0L);
+            if (ud > 0) {
+                g.put("upd", ud);
+                g.put("updTime", prefs.getBoolean("ut:" + p, false));
+                g.put("updDur", prefs.getLong("ul:" + p, 0L));
+            }
+            int uc = prefs.getInt("uc:" + p, 0);
+            if (uc > 0) g.put("updCycle", uc);
+            if (withLinks) {
+                String u = prefs.getString("u:" + p, null);
+                if (u != null) g.put("link", u);
+            }
+            arr.put(g);
+        }
+        o.put("games", arr);
+        return o.toString(1);
+    }
+
+    void showExport() {
+        CharSequence[] items = {
+                "백업용으로 공유 (내 링크 포함)",
+                "저장소 올리기용으로 공유 (내 링크 제외)",
+                "클립보드에 복사 (내 링크 포함)"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle("설정 내보내기")
+                .setItems(items, new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        try {
+                            String js = exportJson(which != 1);
+                            if (which == 2) {
+                                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                                cm.setPrimaryClip(ClipData.newPlainText("게임 관리 설정", js));
+                                Toast.makeText(MainActivity.this, "복사했어요", Toast.LENGTH_SHORT).show();
+                            } else {
+                                Intent i = new Intent(Intent.ACTION_SEND);
+                                i.setType("text/plain");
+                                i.putExtra(Intent.EXTRA_SUBJECT, "게임 관리 설정");
+                                i.putExtra(Intent.EXTRA_TEXT, js);
+                                startActivity(Intent.createChooser(i, "설정 내보내기"));
+                            }
+                        } catch (Exception e) {
+                            Toast.makeText(MainActivity.this, "내보내지 못했어요: " + e.getMessage(),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    }
+                })
+                .setNegativeButton("닫기", null)
+                .show();
+    }
+
+    void showImport() {
+        LinearLayout box = new LinearLayout(this);
+        box.setPadding(dp(20), dp(4), dp(20), 0);
+        final EditText in = new EditText(this);
+        in.setHint("내보낸 설정 텍스트를 붙여 넣으세요");
+        in.setMinLines(4);
+        in.setMaxLines(8);
+        in.setGravity(Gravity.TOP);
+        in.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        box.addView(in, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        new AlertDialog.Builder(this)
+                .setTitle("설정 가져오기")
+                .setView(box)
+                .setPositiveButton("가져오기", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        confirmApply(in.getText().toString(), "붙여 넣은 설정");
+                    }
+                })
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
+    void fetchPresets() {
+        Toast.makeText(this, "저장소에서 설정 받는 중…", Toast.LENGTH_SHORT).show();
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    final String js = httpText(RAW + "presets.json?t=" + System.currentTimeMillis());
+                    ui.post(new Runnable() {
+                        public void run() {
+                            if (!isFinishing()) confirmApply(js, "저장소 설정");
+                        }
+                    });
+                } catch (Exception e) {
+                    if ("HTTP 404".equals(e.getMessage())) toast("저장소에 올려둔 설정이 아직 없어요");
+                    else toast("설정을 받지 못했어요 (" + e.getMessage() + ")");
+                }
+            }
+        }).start();
+    }
+
+    void confirmApply(String raw, String what) {
+        final JSONObject o;
+        final JSONArray games;
+        try {
+            int a = raw.indexOf('{'), b = raw.lastIndexOf('}');
+            o = new JSONObject(raw.substring(a, b + 1));
+            games = o.optJSONArray("games") == null ? new JSONArray() : o.optJSONArray("games");
+        } catch (Exception e) {
+            Toast.makeText(this, "설정 텍스트를 읽지 못했어요. 내보낸 내용 전체를 붙여 넣어 주세요.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(what + " 적용")
+                .setMessage("게임 " + games.length() + "개의 스테미나·업데이트 설정과 완료 기준, 하루 시작, 정렬을 덮어써요. "
+                        + "플레이 기록은 그대로예요.")
+                .setPositiveButton("적용", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        applySettings(o, games);
+                    }
+                })
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
+    void applySettings(JSONObject o, JSONArray games) {
+        SharedPreferences.Editor e = prefs.edit();
+        int mm = o.optInt("minMin", 0);
+        if (mm > 0) e.putInt("minMin", mm);
+        int rh = o.optInt("resetHour", -1);
+        if (rh >= 0 && rh <= 23) e.putInt("resetHour", rh);
+        int sm = o.optInt("sortMode", -1);
+        if (sm == 0 || sm == 1) e.putInt("sortMode", sm);
+        Set<String> t = tracked();
+        int added = 0;
+        for (int i = 0; i < games.length(); i++) {
+            JSONObject g = games.optJSONObject(i);
+            if (g == null) continue;
+            String p = g.optString("pkg", "");
+            if (p.length() == 0 || p.indexOf(':') >= 0) continue;
+            try {
+                pm.getApplicationInfo(p, 0);
+                if (t.add(p)) added++;      // only games installed on this phone join the list
+            } catch (Exception ex) {
+                // not installed here; keep its settings for later
+            }
+            int cap = g.optInt("cap", 0);
+            if (cap > 0) {
+                e.putInt("sc:" + p, cap);
+                e.putFloat("sr:" + p, (float) Math.max(0.0, g.optDouble("regen", 0.0)));
+                int day = g.optInt("daily", -1);
+                e.putInt("sd:" + p, day >= 0 && day <= 23 ? day : -1);
+            }
+            long ud = g.optLong("upd", 0L);
+            if (ud > 0) {
+                e.putLong("ud:" + p, ud);
+                e.putBoolean("ut:" + p, g.optBoolean("updTime", false));
+                long dur = g.optLong("updDur", 0L);
+                if (dur > 0) e.putLong("ul:" + p, dur);
+                else e.remove("ul:" + p);
+            }
+            int uc = g.optInt("updCycle", 0);
+            if (uc > 0) e.putInt("uc:" + p, uc);
+            String link = g.optString("link", "");
+            if (link.startsWith("http://") || link.startsWith("https://")) e.putString("u:" + p, link);
+        }
+        e.putStringSet("pkgs", new HashSet<String>(t)).apply();
+        Toast.makeText(this, "설정을 적용했어요" + (added > 0 ? " (게임 " + added + "개 추가)" : ""),
+                Toast.LENGTH_LONG).show();
+        refresh();
     }
 
     void showSortDialog() {
@@ -1617,6 +1817,21 @@ public class MainActivity extends Activity {
             throw new IOException("HTTP " + code);
         }
         return c;
+    }
+
+    String httpText(String url) throws IOException {
+        HttpURLConnection c = open(url);
+        try {
+            InputStream in = c.getInputStream();
+            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            in.close();
+            return new String(bo.toByteArray(), "UTF-8");
+        } finally {
+            c.disconnect();
+        }
     }
 
     void checkUpdate() {
