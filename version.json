@@ -1,6 +1,6 @@
 {
-  "versionCode": 14,
-  "versionName": "1.13",
+  "versionCode": 15,
+  "versionName": "1.14",
   "apk": "game-manager.apk",
-  "notes": "스테미나가 가득 차면 무음 알림 (설정에서 켜고 끄기)"
+  "notes": "편집 모드 추가: 제목 옆 편집 버튼으로 게임 여러 개를 골라 한 번에 목록에서 제거"
 }

@@ -97,6 +97,11 @@ public class MainActivity extends Activity {
 
     LinearLayout strip;
     LinearLayout detail;
+    boolean editMode = false;
+    final Set<String> picked = new HashSet<String>();
+    TextView editBtn;
+    TextView removeBtn;
+    LinearLayout editBar;
     String selected;
     List<Item> lastItems = new ArrayList<Item>();
     final Map<String, List<String[]>> newsCache = new HashMap<String, List<String[]>>();
@@ -186,7 +191,22 @@ public class MainActivity extends Activity {
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.VERTICAL);
         head.setPadding(dp(20), dp(24), dp(20), dp(8));
-        head.addView(text("게임 관리", 26, TEXT, true));
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        titleRow.addView(text("게임 관리", 26, TEXT, true),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        editBtn = button("편집", CARD, TEXT);
+        editBtn.setPadding(dp(16), dp(8), dp(16), dp(8));
+        editBtn.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                editMode = !editMode;
+                picked.clear();
+                render(lastItems);
+            }
+        });
+        titleRow.addView(editBtn);
+        head.addView(titleRow);
         summary = text("", 14, SUB, false);
         summary.setPadding(0, dp(4), 0, 0);
         head.addView(summary);
@@ -230,6 +250,28 @@ public class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // edit mode bar: remove every picked game at once
+        editBar = new LinearLayout(this);
+        editBar.setOrientation(LinearLayout.VERTICAL);
+        editBar.setPadding(dp(20), 0, dp(20), dp(12));
+        removeBtn = button("", LINE, SUB);
+        removeBtn.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (picked.isEmpty()) return;
+                Set<String> t = tracked();
+                for (String gone : picked) StaminaReceiver.cancel(MainActivity.this, gone);
+                t.removeAll(picked);
+                saveTracked(t);
+                Toast.makeText(MainActivity.this, picked.size() + "개를 목록에서 뺐어요. 기록은 남아 있어요.",
+                        Toast.LENGTH_SHORT).show();
+                picked.clear();
+                refresh();
+            }
+        });
+        editBar.addView(removeBtn);
+        editBar.setVisibility(View.GONE);
+        root.addView(editBar);
+
         ScrollView ds = new ScrollView(this);
         ds.setVerticalScrollBarEnabled(false);
         detail = new LinearLayout(this);
@@ -271,7 +313,12 @@ public class MainActivity extends Activity {
         c.setOrientation(LinearLayout.VERTICAL);
         c.setPadding(dp(14), dp(14), dp(14), dp(14));
         final boolean sel = it.pkg.equals(selected);
-        c.setBackground(box(sel ? 0xFF282C39 : CARD, sel ? TEXT : (it.played ? LINE : TODO), 18));
+        if (editMode) {
+            boolean pk = picked.contains(it.pkg);
+            c.setBackground(box(pk ? 0xFF3A1F24 : CARD, pk ? 0xFFFF6B6B : LINE, 18));
+        } else {
+            c.setBackground(box(sel ? 0xFF282C39 : CARD, sel ? TEXT : (it.played ? LINE : TODO), 18));
+        }
 
         ImageView icon = new ImageView(this);
         if (it.icon != null) icon.setImageDrawable(it.icon);
@@ -357,6 +404,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         runlp.setMargins(0, dp(12), 0, 0);
         c.addView(run, runlp);
+        if (editMode) run.setVisibility(View.GONE);
 
         TextView mark = button(it.played ? "미완료 처리" : "완료 처리",
                 it.played ? LINE : 0x224ADE80, it.played ? SUB : DONE);
@@ -389,17 +437,23 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         mlp.setMargins(0, dp(8), 0, 0);
         c.addView(mark, mlp);
+        if (editMode) mark.setVisibility(View.GONE);
 
         c.setClickable(true);
         c.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                selected = it.pkg;
-                prefs.edit().putString("sel", it.pkg).apply();
+                if (editMode) {
+                    if (!picked.remove(it.pkg)) picked.add(it.pkg);
+                } else {
+                    selected = it.pkg;
+                    prefs.edit().putString("sel", it.pkg).apply();
+                }
                 render(lastItems);
             }
         });
         c.setOnLongClickListener(new View.OnLongClickListener() {
             public boolean onLongClick(View v) {
+                if (editMode) return true;
                 new AlertDialog.Builder(MainActivity.this)
                         .setTitle(it.label)
                         .setMessage("목록에서 뺄까요? 기록은 지워지지 않아요.")
@@ -432,6 +486,22 @@ public class MainActivity extends Activity {
         }
         showDetail(selItem);
         armNotifications(items);
+        Set<String> present = new HashSet<String>();
+        for (int i = 0; i < items.size(); i++) present.add(items.get(i).pkg);
+        picked.retainAll(present);
+        editBtn.setText(editMode ? "완료" : "편집");
+        editBtn.setBackground(box(editMode ? TODO : CARD, 0, 12));
+        editBtn.setTextColor(editMode ? 0xFF1A1300 : TEXT);
+        editBar.setVisibility(editMode ? View.VISIBLE : View.GONE);
+        if (picked.isEmpty()) {
+            removeBtn.setText("뺄 게임을 눌러서 선택하세요");
+            removeBtn.setBackground(box(LINE, 0, 12));
+            removeBtn.setTextColor(SUB);
+        } else {
+            removeBtn.setText("선택한 " + picked.size() + "개 목록에서 제거");
+            removeBtn.setBackground(box(0xFFFF6B6B, 0, 12));
+            removeBtn.setTextColor(0xFF2A0508);
+        }
         strip.removeAllViews();
         int done = 0;
         for (int i = 0; i < items.size(); i++) {
