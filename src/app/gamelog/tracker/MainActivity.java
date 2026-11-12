@@ -431,6 +431,7 @@ public class MainActivity extends Activity {
             selected = selItem.pkg;
         }
         showDetail(selItem);
+        armNotifications(items);
         strip.removeAllViews();
         int done = 0;
         for (int i = 0; i < items.size(); i++) {
@@ -1462,6 +1463,7 @@ public class MainActivity extends Activity {
                 "자동 완료 기준: " + minMin() + "분 이상",
                 "하루 시작: " + resetHour() + "시",
                 "정렬: " + (prefs.getInt("sortMode", 1) == 1 ? "가득까지 남은 시간 짧은 순" : "스테미나 많이 찬 순"),
+                "스테미나 가득 알림: " + (notifOn() ? "켜짐 (무음)" : "꺼짐"),
                 "설정 내보내기",
                 "설정 가져오기 (붙여넣기)",
                 "저장소에서 설정 받기",
@@ -1476,9 +1478,10 @@ public class MainActivity extends Activity {
                         else if (which == 2) showMinDialog();
                         else if (which == 3) showResetDialog();
                         else if (which == 4) showSortDialog();
-                        else if (which == 5) showExport();
-                        else if (which == 6) showImport();
-                        else if (which == 7) fetchPresets();
+                        else if (which == 5) toggleNotif();
+                        else if (which == 6) showExport();
+                        else if (which == 7) showImport();
+                        else if (which == 8) fetchPresets();
                         else checkUpdate();
                     }
                 })
@@ -1524,6 +1527,7 @@ public class MainActivity extends Activity {
                 .setPositiveButton("빼기", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int which) {
                         Set<String> s = tracked();
+                        for (String gone : drop) StaminaReceiver.cancel(MainActivity.this, gone);
                         s.removeAll(drop);
                         saveTracked(s);
                         refresh();
@@ -1551,6 +1555,58 @@ public class MainActivity extends Activity {
                 })
                 .setNegativeButton("취소", null)
                 .show();
+    }
+
+    // ---------- stamina notifications ----------
+
+    boolean notifOn() {
+        return prefs.getBoolean("notif", true);
+    }
+
+    boolean canNotify() {
+        return Build.VERSION.SDK_INT < 33
+                || checkSelfPermission("android.permission.POST_NOTIFICATIONS") == PackageManager.PERMISSION_GRANTED;
+    }
+
+    void askNotifyPermission() {
+        if (!canNotify()) {
+            try {
+                requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 7);
+            } catch (Exception e) {
+                // the system settings page still lets the user allow it
+            }
+        }
+    }
+
+    void armNotifications(List<Item> items) {
+        boolean on = notifOn();
+        boolean any = false;
+        for (int i = 0; i < items.size(); i++) {
+            Item it = items.get(i);
+            if (on && it.cap > 0) {
+                any = true;
+                int sv = stamNow(it);
+                long fa = sv >= 0 && sv < it.cap ? fullAt(it) : Long.MAX_VALUE;
+                if (fa != Long.MAX_VALUE && fa > System.currentTimeMillis()) {
+                    StaminaReceiver.schedule(this, it.pkg, it.label, fa, it.aTime);
+                    continue;
+                }
+            }
+            StaminaReceiver.cancel(this, it.pkg);
+        }
+        if (any && !prefs.getBoolean("askedNotif", false)) {
+            prefs.edit().putBoolean("askedNotif", true).apply();
+            askNotifyPermission();
+        }
+    }
+
+    void toggleNotif() {
+        boolean on = !notifOn();
+        prefs.edit().putBoolean("notif", on).apply();
+        if (on) askNotifyPermission();
+        Toast.makeText(this, on ? "스테미나가 가득 차면 무음 알림을 보내요" : "스테미나 알림을 껐어요",
+                Toast.LENGTH_SHORT).show();
+        refresh();
     }
 
     // ---------- export / import ----------

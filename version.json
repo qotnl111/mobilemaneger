@@ -1,6 +1,6 @@
 {
-  "versionCode": 13,
-  "versionName": "1.12",
+  "versionCode": 14,
+  "versionName": "1.13",
   "apk": "game-manager.apk",
-  "notes": "설정 내보내기·가져오기, 저장소에서 설정 받기 추가"
+  "notes": "스테미나가 가득 차면 무음 알림 (설정에서 켜고 끄기)"
 }
