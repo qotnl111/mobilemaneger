@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.AppOpsManager;
 import android.app.DatePickerDialog;
-import android.app.PendingIntent;
 import android.app.TimePickerDialog;
 import android.app.usage.UsageEvents;
 import android.app.usage.UsageStatsManager;
@@ -15,7 +14,6 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.ColorStateList;
@@ -51,7 +49,6 @@ import android.widget.Toast;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -79,7 +76,6 @@ public class MainActivity extends Activity {
     static final int DAYS = 7;
     static final int[] RESET_HOURS = {0, 4, 5, 6};
     static final String RAW = "https://raw.githubusercontent.com/qotnl111/mobilemaneger/main/";
-    static final String ACTION_INSTALL = "app.gamelog.tracker.INSTALL_STATUS";
 
     static final int BG = 0xFF12141A;
     static final int CARD = 0xFF1D2029;
@@ -1989,7 +1985,7 @@ public class MainActivity extends Activity {
                             new AlertDialog.Builder(MainActivity.this)
                                     .setTitle("새 버전 v" + name)
                                     .setMessage(notes.length() > 0 ? notes : "새 버전이 있어요.")
-                                    .setPositiveButton("업데이트", new DialogInterface.OnClickListener() {
+                                    .setPositiveButton("받으러 가기", new DialogInterface.OnClickListener() {
                                         public void onClick(DialogInterface d, int which) {
                                             downloadAndInstall(apk);
                                         }
@@ -2006,70 +2002,10 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    void downloadAndInstall(final String apk) {
-        Toast.makeText(this, "새 버전 받는 중…", Toast.LENGTH_SHORT).show();
-        new Thread(new Runnable() {
-            public void run() {
-                PackageInstaller.Session ses = null;
-                try {
-                    HttpURLConnection c = open(RAW + apk + "?t=" + System.currentTimeMillis());
-                    PackageInstaller pi = pm.getPackageInstaller();
-                    PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
-                            PackageInstaller.SessionParams.MODE_FULL_INSTALL);
-                    params.setAppPackageName(getPackageName());
-                    int id = pi.createSession(params);
-                    ses = pi.openSession(id);
-                    InputStream in = c.getInputStream();
-                    OutputStream out = ses.openWrite("base.apk", 0, -1);
-                    byte[] buf = new byte[16384];
-                    int n;
-                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                    ses.fsync(out);
-                    out.close();
-                    in.close();
-                    c.disconnect();
-                    Intent cb = new Intent(MainActivity.this, MainActivity.class);
-                    cb.setAction(ACTION_INSTALL);
-                    int flags = PendingIntent.FLAG_UPDATE_CURRENT
-                            | (Build.VERSION.SDK_INT >= 31 ? 0x02000000 : 0);   // FLAG_MUTABLE
-                    PendingIntent pend = PendingIntent.getActivity(MainActivity.this, id, cb, flags);
-                    ses.commit(pend.getIntentSender());
-                    ses.close();
-                } catch (Exception e) {
-                    if (ses != null) {
-                        try {
-                            ses.abandon();
-                        } catch (Exception ignored) {
-                            // nothing to clean up
-                        }
-                    }
-                    toast("업데이트를 받지 못했어요 (" + e.getMessage() + ")");
-                }
-            }
-        }).start();
-    }
-
-    @Override
-    protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        if (intent == null || !ACTION_INSTALL.equals(intent.getAction())) return;
-        Bundle ex = intent.getExtras();
-        if (ex == null) return;
-        int status = ex.getInt(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
-        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
-            Object confirm = ex.get(Intent.EXTRA_INTENT);
-            if (confirm instanceof Intent) {
-                try {
-                    startActivity((Intent) confirm);
-                } catch (Exception e) {
-                    toast("설치 화면을 열지 못했어요");
-                }
-            }
-        } else if (status == PackageInstaller.STATUS_SUCCESS) {
-            toast("업데이트 완료");
-        } else {
-            toast("설치하지 못했어요: " + ex.getString(PackageInstaller.EXTRA_STATUS_MESSAGE));
-        }
+    /** Hands the download to the browser; the user installs the file from there. */
+    void downloadAndInstall(String apk) {
+        Toast.makeText(this, "브라우저에서 받은 파일을 열어 설치해 주세요", Toast.LENGTH_LONG).show();
+        openUrl("https://github.com/qotnl111/mobilemaneger/raw/main/" + apk);
     }
 
     // ---------- add dialog ----------

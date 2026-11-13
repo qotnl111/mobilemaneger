@@ -10,7 +10,9 @@
 ## 앱 안 업데이트
 
 설정 > 업데이트 확인은 이 저장소 main 브랜치의 `version.json`과 `game-manager.apk`를
-raw.githubusercontent.com 에서 받아 온다. 저장소가 공개(public)여야 동작한다.
+raw.githubusercontent.com 에서 확인하고, 새 버전이 있으면 브라우저로 APK 주소를 연다.
+저장소가 공개(public)여야 동작한다. 앱이 직접 설치하는 기능(REQUEST_INSTALL_PACKAGES)과
+부팅 시 자동 실행은 Play 프로텍트가 유해 앱으로 차단해서 뺐다. 다시 넣지 않는다.
 
 ## 새 버전 내는 법
 

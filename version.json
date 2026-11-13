@@ -1,6 +1,6 @@
 {
-  "versionCode": 16,
-  "versionName": "1.15",
+  "versionCode": 17,
+  "versionName": "1.16",
   "apk": "game-manager.apk",
-  "notes": "Play 프로텍트 차단 대응: 부팅 시 자동 실행 권한 제거"
+  "notes": "Play 프로텍트 차단 대응: 앱 안 설치 기능 제거, 업데이트는 브라우저로 받아 설치"
 }
