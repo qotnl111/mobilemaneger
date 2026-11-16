@@ -104,7 +104,6 @@ public class MainActivity extends Activity {
     final Map<String, Long> newsTime = new HashMap<String, Long>();
     LinearLayout permBox;
     TextView summary;
-    volatile String todayKey = "";
 
     static class Item {
         String pkg;
@@ -115,6 +114,9 @@ public class MainActivity extends Activity {
         long total;
         boolean played;
         boolean manual;
+        int ownHour = -1;   // this game's own day start, -1 = follow the global setting
+        int dayHour;        // day start actually used
+        String dayKey = ""; // storage key of this game's current day
         int cap;            // stamina cap, 0 = not tracked
         double regen;       // minutes per point, 0 = no gradual refill
         int daily = -1;     // hour of a full daily refill, -1 = none
@@ -408,8 +410,8 @@ public class MainActivity extends Activity {
         mark.setPadding(dp(8), dp(9), dp(8), dp(9));
         mark.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                String mk = "m:" + todayKey + ":" + it.pkg;
-                String xk = "x:" + todayKey + ":" + it.pkg;
+                String mk = "m:" + it.dayKey + ":" + it.pkg;
+                String xk = "x:" + it.dayKey + ":" + it.pkg;
                 boolean auto = it.days[0] >= minMs();
                 SharedPreferences.Editor e = prefs.edit();
                 if (it.played) {
@@ -558,9 +560,9 @@ public class MainActivity extends Activity {
         return (min / 60L) + "시간";
     }
 
-    String dayName(int back) {
+    String dayName(int back, int hour) {
         Calendar c = Calendar.getInstance();
-        c.setTimeInMillis(dayStart(back, null));
+        c.setTimeInMillis(dayStart(back, null, hour));
         return String.valueOf("일월화수목금토".charAt(c.get(Calendar.DAY_OF_WEEK) - 1));
     }
 
@@ -630,12 +632,26 @@ public class MainActivity extends Activity {
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(54));
             hlp.setMargins(0, dp(2), 0, dp(4));
             col.addView(holder, hlp);
-            TextView dl = text(i == 0 ? "오늘" : dayName(i), 11, i == 0 ? TEXT : SUB, i == 0);
+            TextView dl = text(i == 0 ? "오늘" : dayName(i, it.dayHour), 11, i == 0 ? TEXT : SUB, i == 0);
             dl.setGravity(Gravity.CENTER);
             col.addView(dl);
             chart.addView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         }
         detail.addView(chart);
+
+        TextView dayBtn = button("이 게임의 하루 시작: "
+                + (it.ownHour >= 0 ? hourName(it.ownHour) : "기본 (" + hourName(resetHour()) + ")"),
+                CARD, it.ownHour >= 0 ? TODO : SUB);
+        dayBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        dayBtn.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                showGameDayDialog(it);
+            }
+        });
+        LinearLayout.LayoutParams dblp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dblp.setMargins(0, dp(8), 0, 0);
+        detail.addView(dayBtn, dblp);
 
         TextView sh = text("스테미나", 15, TEXT, true);
         sh.setPadding(0, dp(18), 0, dp(8));
@@ -1049,6 +1065,32 @@ public class MainActivity extends Activity {
         b.show();
     }
 
+    static String hourName(int h) {
+        if (h == 0) return "0시 (자정)";
+        if (h < 12) return "오전 " + h + "시";
+        if (h == 12) return "낮 12시";
+        return "오후 " + (h - 12) + "시";
+    }
+
+    void showGameDayDialog(final Item it) {
+        CharSequence[] names = new CharSequence[25];
+        names[0] = "기본 설정 따름 (" + hourName(resetHour()) + ")";
+        for (int h = 0; h < 24; h++) names[h + 1] = hourName(h);
+        new AlertDialog.Builder(this)
+                .setTitle(it.label + " 하루 시작")
+                .setSingleChoiceItems(names, it.ownHour >= 0 ? it.ownHour + 1 : 0,
+                        new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface d, int which) {
+                                if (which == 0) prefs.edit().remove("rh:" + it.pkg).apply();
+                                else prefs.edit().putInt("rh:" + it.pkg, which - 1).apply();
+                                d.dismiss();
+                                refresh();
+                            }
+                        })
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
     void editLink(final Item it) {
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -1276,7 +1318,10 @@ public class MainActivity extends Activity {
 
     /** Start of the play day that lies `back` days before today, plus its storage key. */
     long dayStart(int back, String[] keyOut) {
-        int h = resetHour();
+        return dayStart(back, keyOut, resetHour());
+    }
+
+    long dayStart(int back, String[] keyOut, int h) {
         Calendar c = Calendar.getInstance();
         c.add(Calendar.HOUR_OF_DAY, -h);
         c.set(Calendar.HOUR_OF_DAY, 0);
@@ -1385,38 +1430,61 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 it.label = p + " (삭제됨)";
             }
+            it.ownHour = prefs.getInt("rh:" + p, -1);
+            it.dayHour = it.ownHour >= 0 && it.ownHour <= 23 ? it.ownHour : resetHour();
             map.put(p, it);
         }
 
-        // the day boundary moved: recount the visible week with the new boundary
-        if (access && prefs.getInt("keyHour", 0) != resetHour()) {
-            SharedPreferences.Editor clr = prefs.edit();
-            for (int d = 0; d < DAYS; d++) {
-                String[] key = new String[1];
-                dayStart(d, key);
-                for (String p : pkgs) clr.remove("t:" + key[0] + ":" + p);
+        // a game's day boundary moved: recount its visible week with the new boundary
+        if (access) {
+            int globalKey = prefs.getInt("keyHour", 0);
+            SharedPreferences.Editor clr = null;
+            for (String p : pkgs) {
+                int h = map.get(p).dayHour;
+                if (prefs.getInt("kh:" + p, globalKey) == h) continue;
+                if (clr == null) clr = prefs.edit();
+                for (int d = 0; d < DAYS; d++) {
+                    String[] key = new String[1];
+                    dayStart(d, key, h);
+                    clr.remove("t:" + key[0] + ":" + p);
+                }
+                clr.putInt("kh:" + p, h);
             }
-            clr.putInt("keyHour", resetHour()).commit();
+            if (clr != null) clr.commit();
         }
 
         Map<String, ?> stored = prefs.getAll();
         SharedPreferences.Editor ed = prefs.edit();
         Set<String> shownKeys = new HashSet<String>();
         long now = System.currentTimeMillis();
+        // games can start their day at different hours: handle each hour as a group
+        Map<Integer, Set<String>> byHour = new HashMap<Integer, Set<String>>();
+        for (String p : pkgs) {
+            Integer h = Integer.valueOf(map.get(p).dayHour);
+            Set<String> g = byHour.get(h);
+            if (g == null) {
+                g = new HashSet<String>();
+                byHour.put(h, g);
+            }
+            g.add(p);
+        }
+        for (Map.Entry<Integer, Set<String>> grp : byHour.entrySet()) {
+        final int gh = grp.getKey().intValue();
+        final Set<String> gp = grp.getValue();
         for (int d = 0; d < DAYS; d++) {
             String[] key = new String[1];
-            long start = dayStart(d, key);
+            long start = dayStart(d, key, gh);
             long end = Math.min(start + DAY_MS, now);
             Map<String, Long> u = new HashMap<String, Long>();
             Map<String, Long> le = new HashMap<String, Long>();
             if (access) {
                 try {
-                    u = usage(start, end, pkgs, le);
+                    u = usage(start, end, gp, le);
                 } catch (Exception e) {
                     // keep what was stored
                 }
             }
-            for (String p : pkgs) {
+            for (String p : gp) {
                 String k = "t:" + key[0] + ":" + p;
                 shownKeys.add(k);
                 long v = u.containsKey(p) ? u.get(p).longValue() : 0L;
@@ -1438,12 +1506,13 @@ public class MainActivity extends Activity {
                 it.done[d] = !no && (v >= minMs() || man);
                 if (d == 0) {
                     it.manual = man;
-                    todayKey = key[0];
+                    it.dayKey = key[0];
                 }
                 it.days[d] = v;
                 it.week += v;
                 it.total += v;
             }
+        }
         }
         // stamina: assume it was spent when a completed play day ended
         for (String p : pkgs) {
@@ -1709,6 +1778,8 @@ public class MainActivity extends Activity {
             }
             int uc = prefs.getInt("uc:" + p, 0);
             if (uc > 0) g.put("updCycle", uc);
+            int rh = prefs.getInt("rh:" + p, -1);
+            if (rh >= 0) g.put("dayStart", rh);
             if (withLinks) {
                 String u = prefs.getString("u:" + p, null);
                 if (u != null) g.put("link", u);
@@ -1857,6 +1928,8 @@ public class MainActivity extends Activity {
             }
             int uc = g.optInt("updCycle", 0);
             if (uc > 0) e.putInt("uc:" + p, uc);
+            int ds = g.optInt("dayStart", -1);
+            if (ds >= 0 && ds <= 23) e.putInt("rh:" + p, ds);
             String link = g.optString("link", "");
             if (link.startsWith("http://") || link.startsWith("https://")) e.putString("u:" + p, link);
         }

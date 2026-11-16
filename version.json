@@ -1,6 +1,6 @@
 {
-  "versionCode": 17,
-  "versionName": "1.16",
+  "versionCode": 18,
+  "versionName": "1.17",
   "apk": "game-manager.apk",
-  "notes": "Play 프로텍트 차단 대응: 앱 안 설치 기능 제거, 업데이트는 브라우저로 받아 설치"
+  "notes": "게임별 하루 시작 시각 설정 추가 (예: 9시 초기화 게임)"
 }
