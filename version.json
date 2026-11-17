@@ -1,6 +1,6 @@
 {
-  "versionCode": 19,
-  "versionName": "1.18",
+  "versionCode": 20,
+  "versionName": "1.19",
   "apk": "game-manager.apk",
-  "notes": "홈 화면 위젯 추가: 안 한 게임과 스테미나를 앱을 열지 않고 확인"
+  "notes": "연속 출석·미접속 표시, 업데이트 시작·끝 무음 알림 추가"
 }

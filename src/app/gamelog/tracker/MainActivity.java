@@ -114,6 +114,8 @@ public class MainActivity extends Activity {
         long total;
         boolean played;
         boolean manual;
+        int streak;         // days done in a row, alive only if done today or yesterday
+        int missed = -1;    // days in a row not done, counting today; -1 = no record
         int ownHour = -1;   // this game's own day start, -1 = follow the global setting
         int dayHour;        // day start actually used
         String dayKey = ""; // storage key of this game's current day
@@ -341,6 +343,13 @@ public class MainActivity extends Activity {
         pill.setPadding(dp(9), dp(3), dp(9), dp(3));
         c.addView(pill, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        String badge = streakText(it);
+        if (badge != null) {
+            TextView bt = text(badge, 11, it.missed >= 2 ? 0xFFFF6B6B : DONE, true);
+            bt.setPadding(0, dp(6), 0, 0);
+            c.addView(bt);
+        }
 
         if (it.cap > 0) {
             int sv = stamNow(it);
@@ -609,8 +618,10 @@ public class MainActivity extends Activity {
         top.addView(run);
         detail.addView(top);
 
-        TextView st = text("오늘 " + fmt(it.days[0]) + " · 7일 " + fmt(it.week) + " · 누적 " + fmt(it.total),
-                13, SUB, false);
+        String sbadge = streakText(it);
+        TextView st = text("오늘 " + fmt(it.days[0]) + " · 7일 " + fmt(it.week) + " · 누적 " + fmt(it.total)
+                + (sbadge != null ? "\n" + sbadge : ""), 13, SUB, false);
+        st.setLineSpacing(dp(3), 1f);
         st.setPadding(0, dp(6), 0, dp(12));
         detail.addView(st);
 
@@ -1071,6 +1082,12 @@ public class MainActivity extends Activity {
         b.show();
     }
 
+    static String streakText(Item it) {
+        if (it.missed >= 2) return it.missed + "일째 안 함";
+        if (it.streak >= 2) return it.streak + "일 연속";
+        return null;
+    }
+
     static String hourName(int h) {
         if (h == 0) return "0시 (자정)";
         if (h < 12) return "오전 " + h + "시";
@@ -1521,6 +1538,39 @@ public class MainActivity extends Activity {
             }
         }
         }
+        // streak and absence, walking back through our own stored days
+        long mm = minMs();
+        for (String p : pkgs) {
+            Item it = map.get(p);
+            int first = -1;
+            for (int d = 0; d < 400; d++) {
+                boolean dn;
+                if (d < DAYS) {
+                    dn = it.done[d];
+                } else {
+                    String[] key = new String[1];
+                    dayStart(d, key, it.dayHour);
+                    Object old = stored.get("t:" + key[0] + ":" + p);
+                    long was = (old instanceof Long) ? ((Long) old).longValue() : 0L;
+                    dn = !Boolean.TRUE.equals(stored.get("x:" + key[0] + ":" + p))
+                            && (was >= mm || Boolean.TRUE.equals(stored.get("m:" + key[0] + ":" + p)));
+                }
+                if (first < 0) {
+                    if (dn) {
+                        first = d;
+                        it.streak = 1;
+                    } else if (d >= 60) {
+                        break;
+                    }
+                } else if (dn) {
+                    it.streak++;
+                } else {
+                    break;
+                }
+            }
+            it.missed = first;
+            if (first > 1) it.streak = 0;
+        }
         // stamina: assume it was spent when a completed play day ended
         for (String p : pkgs) {
             Item it = map.get(p);
@@ -1606,6 +1656,7 @@ public class MainActivity extends Activity {
                 "하루 시작: " + resetHour() + "시",
                 "정렬: " + (prefs.getInt("sortMode", 1) == 1 ? "가득까지 남은 시간 짧은 순" : "스테미나 많이 찬 순"),
                 "스테미나 가득 알림: " + (notifOn() ? "켜짐 (무음)" : "꺼짐"),
+                "업데이트 시작·끝 알림: " + (prefs.getBoolean("notifUpd", true) ? "켜짐 (무음)" : "꺼짐"),
                 "설정 내보내기",
                 "설정 가져오기 (붙여넣기)",
                 "저장소에서 설정 받기",
@@ -1621,9 +1672,10 @@ public class MainActivity extends Activity {
                         else if (which == 3) showResetDialog();
                         else if (which == 4) showSortDialog();
                         else if (which == 5) toggleNotif();
-                        else if (which == 6) showExport();
-                        else if (which == 7) showImport();
-                        else if (which == 8) fetchPresets();
+                        else if (which == 6) toggleUpdNotif();
+                        else if (which == 7) showExport();
+                        else if (which == 8) showImport();
+                        else if (which == 9) fetchPresets();
                         else checkUpdate();
                     }
                 })
@@ -1736,10 +1788,44 @@ public class MainActivity extends Activity {
             }
             StaminaReceiver.cancel(this, it.pkg);
         }
+        boolean uon = prefs.getBoolean("notifUpd", true);
+        long nowU = System.currentTimeMillis();
+        for (int i = 0; i < items.size(); i++) {
+            Item it = items.get(i);
+            long st = 0, en = 0;
+            if (uon && it.upd > 0 && it.updTime) {
+                any = true;
+                st = nextOccurrence(it.upd, it.updCycle, nowU);
+                if (it.updDur > 0) en = nextOccurrence(it.upd + it.updDur, it.updCycle, nowU);
+            }
+            if (st > nowU) StaminaReceiver.scheduleUpd(this, it.pkg, it.label, "s", st);
+            else StaminaReceiver.cancelUpd(this, it.pkg, "s");
+            if (en > nowU) StaminaReceiver.scheduleUpd(this, it.pkg, it.label, "e", en);
+            else StaminaReceiver.cancelUpd(this, it.pkg, "e");
+        }
         if (any && !prefs.getBoolean("askedNotif", false)) {
             prefs.edit().putBoolean("askedNotif", true).apply();
             askNotifyPermission();
         }
+    }
+
+    /** The given moment, or its next repeat after now when the update repeats. */
+    static long nextOccurrence(long t, int cycleDays, long now) {
+        if (t > now || cycleDays <= 0) return t;
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(t);
+        int guard = 0;
+        while (c.getTimeInMillis() <= now && guard++ < 5000) c.add(Calendar.DAY_OF_YEAR, cycleDays);
+        return c.getTimeInMillis();
+    }
+
+    void toggleUpdNotif() {
+        boolean on = !prefs.getBoolean("notifUpd", true);
+        prefs.edit().putBoolean("notifUpd", on).apply();
+        if (on) askNotifyPermission();
+        Toast.makeText(this, on ? "업데이트 시작과 끝에 무음 알림을 보내요" : "업데이트 알림을 껐어요",
+                Toast.LENGTH_SHORT).show();
+        refresh();
     }
 
     void toggleNotif() {

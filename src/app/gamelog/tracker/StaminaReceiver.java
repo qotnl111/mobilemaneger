@@ -21,6 +21,9 @@ public class StaminaReceiver extends BroadcastReceiver {
 
     static final String ACTION_FULL = "app.gamelog.tracker.STAMINA_FULL";
     static final String CHANNEL = "stamina";
+    static final String ACTION_UPD = "app.gamelog.tracker.GAME_UPDATE";
+    static final String CHANNEL_UPD = "update";
+    static final long DAY = 24L * 60L * 60L * 1000L;
     static final int IMMUTABLE = 0x04000000;
 
     static SharedPreferences prefs(Context c) {
@@ -74,6 +77,11 @@ public class StaminaReceiver extends BroadcastReceiver {
             if (ACTION_FULL.equals(a)) {
                 Uri u = in.getData();
                 if (u != null && u.getLastPathSegment() != null) handle(c, u.getLastPathSegment());
+            } else if (ACTION_UPD.equals(a)) {
+                Uri u = in.getData();
+                if (u != null && u.getPathSegments() != null && u.getPathSegments().size() == 2) {
+                    handleUpd(c, u.getPathSegments().get(0), u.getPathSegments().get(1));
+                }
             } else if (Intent.ACTION_BOOT_COMPLETED.equals(a)
                     || Intent.ACTION_MY_PACKAGE_REPLACED.equals(a)) {
                 // alarms do not survive a reboot: arm them again
@@ -90,6 +98,112 @@ public class StaminaReceiver extends BroadcastReceiver {
         } catch (Exception e) {
             // a failed notification must never crash the process
         }
+    }
+
+    // ---------- game update start / end ----------
+
+    static PendingIntent updIntent(Context c, String kind, String pkg) {
+        Intent i = new Intent(c, StaminaReceiver.class);
+        i.setAction(ACTION_UPD);
+        i.setData(Uri.parse("gamelog://upd/" + kind + "/" + pkg));
+        return PendingIntent.getBroadcast(c, 0, i, PendingIntent.FLAG_UPDATE_CURRENT | IMMUTABLE);
+    }
+
+    static void setUpdAlarm(Context c, String kind, String pkg, long when) {
+        try {
+            AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, when, updIntent(c, kind, pkg));
+        } catch (Exception e) {
+            // without the alarm there is simply no notification
+        }
+    }
+
+    /** kind "s" = update starts, "e" = update ends. */
+    static void scheduleUpd(Context c, String pkg, String label, String kind, long when) {
+        SharedPreferences p = prefs(c);
+        String k = "un:" + kind + ":" + pkg;
+        if (p.getLong(k, 0L) != when || !label.equals(p.getString("ub:" + pkg, null))) {
+            p.edit().putLong(k, when).putString("ub:" + pkg, label).apply();
+        }
+        setUpdAlarm(c, kind, pkg, when);
+    }
+
+    static void cancelUpd(Context c, String pkg, String kind) {
+        try {
+            AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+            am.cancel(updIntent(c, kind, pkg));
+        } catch (Exception e) {
+            // nothing was armed
+        }
+        SharedPreferences p = prefs(c);
+        if (p.contains("un:" + kind + ":" + pkg)) p.edit().remove("un:" + kind + ":" + pkg).apply();
+    }
+
+    static void handleUpd(Context c, String kind, String pkg) {
+        boolean end = "e".equals(kind);
+        if (!end && !"s".equals(kind)) return;
+        SharedPreferences p = prefs(c);
+        String k = "un:" + kind + ":" + pkg;
+        if (!p.contains(k)) return;
+        long when = p.getLong(k, 0L);
+        Set<String> tracked = p.getStringSet("pkgs", null);
+        long ud = p.getLong("ud:" + pkg, 0L);
+        long dur = p.getLong("ul:" + pkg, 0L);
+        int cycle = p.getInt("uc:" + pkg, 0);
+        if (!p.getBoolean("notifUpd", true) || tracked == null || !tracked.contains(pkg)
+                || ud <= 0 || !p.getBoolean("ut:" + pkg, false) || (end && dur <= 0)) {
+            cancelUpd(c, pkg, kind);
+            return;
+        }
+        // the date may have been edited since the alarm was armed
+        long diff = when - (ud + (end ? dur : 0L));
+        boolean ok = Math.abs(diff) < 60000L;
+        if (!ok && cycle > 0 && diff > 0) {
+            long r = diff % (cycle * DAY);
+            ok = r < 60000L || cycle * DAY - r < 60000L;
+        }
+        if (!ok) {
+            cancelUpd(c, pkg, kind);
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now < when - 60000L) {          // woke up early
+            setUpdAlarm(c, kind, pkg, when);
+            return;
+        }
+        String label = p.getString("ub:" + pkg, pkg);
+        p.edit().remove(k).apply();
+        if (cycle > 0) scheduleUpd(c, pkg, label, kind, when + cycle * DAY);
+        if (now > when + 6L * 60L * 60L * 1000L) return;     // far too late to be useful
+
+        NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
+        NotificationChannel ch = new NotificationChannel(CHANNEL_UPD, "게임 업데이트 알림",
+                NotificationManager.IMPORTANCE_LOW);
+        ch.setSound(null, null);
+        ch.enableVibration(false);
+        nm.createNotificationChannel(ch);
+        Intent open = c.getPackageManager().getLaunchIntentForPackage(pkg);
+        if (open == null) open = new Intent(c, MainActivity.class);
+        PendingIntent tap = PendingIntent.getActivity(c, pkg.hashCode(), open,
+                PendingIntent.FLAG_UPDATE_CURRENT | IMMUTABLE);
+        int icon = c.getResources().getIdentifier("ic_stat", "drawable", c.getPackageName());
+        String text;
+        if (end) {
+            text = "이제 접속할 수 있어요 · 누르면 게임 실행";
+        } else if (dur > 0) {
+            text = new java.text.SimpleDateFormat("a h:mm", java.util.Locale.KOREA)
+                    .format(new java.util.Date(when + dur)) + "에 끝나요";
+        } else {
+            text = "업데이트 시간이 됐어요";
+        }
+        Notification n = new Notification.Builder(c, CHANNEL_UPD)
+                .setSmallIcon(icon != 0 ? icon : android.R.drawable.ic_dialog_info)
+                .setContentTitle(label + (end ? " 업데이트 끝" : " 업데이트 시작"))
+                .setContentText(text)
+                .setContentIntent(tap)
+                .setAutoCancel(true)
+                .build();
+        nm.notify(("upd" + pkg).hashCode(), n);
     }
 
     /** Foreground time and last close of one game between two moments. */
