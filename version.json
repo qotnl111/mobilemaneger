@@ -1,6 +1,6 @@
 {
-  "versionCode": 18,
-  "versionName": "1.17",
+  "versionCode": 19,
+  "versionName": "1.18",
   "apk": "game-manager.apk",
-  "notes": "게임별 하루 시작 시각 설정 추가 (예: 9시 초기화 게임)"
+  "notes": "홈 화면 위젯 추가: 안 한 게임과 스테미나를 앱을 열지 않고 확인"
 }

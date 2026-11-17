@@ -142,6 +142,12 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        GameWidget.updateAll(this);     // keep the home screen widget in step with the app
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         refresh();
@@ -1321,7 +1327,7 @@ public class MainActivity extends Activity {
         return dayStart(back, keyOut, resetHour());
     }
 
-    long dayStart(int back, String[] keyOut, int h) {
+    static long dayStart(int back, String[] keyOut, int h) {
         Calendar c = Calendar.getInstance();
         c.add(Calendar.HOUR_OF_DAY, -h);
         c.set(Calendar.HOUR_OF_DAY, 0);
@@ -1337,7 +1343,8 @@ public class MainActivity extends Activity {
     }
 
     /** Foreground time per tracked package between start and end. */
-    Map<String, Long> usage(long start, long end, Set<String> pkgs, Map<String, Long> lastEnd) {
+    static Map<String, Long> usage(UsageStatsManager usm, long start, long end, Set<String> pkgs,
+            Map<String, Long> lastEnd) {
         Map<String, Long> total = new HashMap<String, Long>();
         if (end <= start) return total;
         UsageEvents ev = usm.queryEvents(start, end);
@@ -1479,7 +1486,7 @@ public class MainActivity extends Activity {
             Map<String, Long> le = new HashMap<String, Long>();
             if (access) {
                 try {
-                    u = usage(start, end, gp, le);
+                    u = usage(usm, start, end, gp, le);
                 } catch (Exception e) {
                     // keep what was stored
                 }
