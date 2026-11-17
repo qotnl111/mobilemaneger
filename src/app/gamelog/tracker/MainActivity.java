@@ -114,6 +114,7 @@ public class MainActivity extends Activity {
         long total;
         boolean played;
         boolean manual;
+        long base = -1;     // play time when marked not done today; done again at base + threshold
         int streak;         // days done in a row, alive only if done today or yesterday
         int missed = -1;    // days in a row not done, counting today; -1 = no record
         int ownHour = -1;   // this game's own day start, -1 = follow the global setting
@@ -376,7 +377,7 @@ public class MainActivity extends Activity {
 
         ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax((int) (minMs() / 1000L));
-        bar.setProgress((int) Math.min(minMs() / 1000L, it.days[0] / 1000L));
+        bar.setProgress((int) Math.min(minMs() / 1000L, (it.days[0] - Math.max(0L, it.base)) / 1000L));
         bar.setProgressTintList(ColorStateList.valueOf(it.played ? DONE : TODO));
         bar.setProgressBackgroundTintList(ColorStateList.valueOf(LINE));
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
@@ -433,7 +434,7 @@ public class MainActivity extends Activity {
                     // back to not done; forget today's "stamina spent" assumption
                     e.remove(mk).remove("aa:" + it.pkg);
                     if (it.manual) e.remove("at:" + it.pkg).remove("av:" + it.pkg);
-                    if (auto) e.putBoolean(xk, true);
+                    if (auto) e.putLong(xk, it.days[0]);   // done again after another full threshold of play
                 } else {
                     e.remove(xk);
                     if (!auto) {
@@ -1082,6 +1083,12 @@ public class MainActivity extends Activity {
         b.show();
     }
 
+    /** True while a "not done" mark still holds: until another full threshold has been played. */
+    static boolean blocked(Object mark, long played, long min) {
+        if (mark instanceof Long) return played < ((Long) mark).longValue() + min;
+        return Boolean.TRUE.equals(mark);
+    }
+
     static String streakText(Item it) {
         if (it.missed >= 2) return it.missed + "일째 안 함";
         if (it.streak >= 2) return it.streak + "일 연속";
@@ -1513,7 +1520,7 @@ public class MainActivity extends Activity {
                 shownKeys.add(k);
                 long v = u.containsKey(p) ? u.get(p).longValue() : 0L;
                 if (v >= minMs() && le.containsKey(p)
-                        && !Boolean.TRUE.equals(stored.get("x:" + key[0] + ":" + p))) {
+                        && !blocked(stored.get("x:" + key[0] + ":" + p), v, minMs())) {
                     Item ai = map.get(p);
                     ai.autoAnchor = Math.max(ai.autoAnchor, le.get(p).longValue());
                 }
@@ -1526,7 +1533,13 @@ public class MainActivity extends Activity {
                 }
                 Item it = map.get(p);
                 boolean man = Boolean.TRUE.equals(stored.get("m:" + key[0] + ":" + p));
-                boolean no = Boolean.TRUE.equals(stored.get("x:" + key[0] + ":" + p));   // marked not done by hand
+                Object xo = stored.get("x:" + key[0] + ":" + p);      // marked not done by hand
+                if (d == 0 && Boolean.TRUE.equals(xo)) {             // older versions stored only a flag
+                    xo = Long.valueOf(v);
+                    ed.putLong("x:" + key[0] + ":" + p, v);
+                }
+                boolean no = blocked(xo, v, minMs());
+                if (d == 0 && xo instanceof Long) it.base = ((Long) xo).longValue();
                 it.done[d] = !no && (v >= minMs() || man);
                 if (d == 0) {
                     it.manual = man;
@@ -1552,7 +1565,7 @@ public class MainActivity extends Activity {
                     dayStart(d, key, it.dayHour);
                     Object old = stored.get("t:" + key[0] + ":" + p);
                     long was = (old instanceof Long) ? ((Long) old).longValue() : 0L;
-                    dn = !Boolean.TRUE.equals(stored.get("x:" + key[0] + ":" + p))
+                    dn = !blocked(stored.get("x:" + key[0] + ":" + p), was, mm)
                             && (was >= mm || Boolean.TRUE.equals(stored.get("m:" + key[0] + ":" + p)));
                 }
                 if (first < 0) {

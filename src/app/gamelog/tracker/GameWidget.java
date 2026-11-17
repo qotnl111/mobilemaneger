@@ -211,8 +211,8 @@ public class GameWidget extends AppWidgetProvider {
                 Object old = stored.get("t:" + key[0] + ":" + p);
                 long was = (old instanceof Long) ? ((Long) old).longValue() : 0L;
                 boolean man = Boolean.TRUE.equals(stored.get("m:" + key[0] + ":" + p));
-                boolean no = Boolean.TRUE.equals(stored.get("x:" + key[0] + ":" + p));
                 it.days[0] = Math.max(live, was);
+                boolean no = MainActivity.blocked(stored.get("x:" + key[0] + ":" + p), it.days[0], minMs);
                 it.manual = man;
                 it.played = !no && (it.days[0] >= minMs || man);
                 it.done[0] = it.played;

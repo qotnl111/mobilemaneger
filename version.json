@@ -1,6 +1,6 @@
 {
-  "versionCode": 20,
-  "versionName": "1.19",
+  "versionCode": 21,
+  "versionName": "1.20",
   "apk": "game-manager.apk",
-  "notes": "연속 출석·미접속 표시, 업데이트 시작·끝 무음 알림 추가"
+  "notes": "버그 수정: 미완료 처리 후 기준 시간만큼 더 플레이하면 다시 자동 완료"
 }
