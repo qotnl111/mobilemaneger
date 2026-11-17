@@ -1388,14 +1388,35 @@ public class MainActivity extends Activity {
         Map<String, String> openPkg = new HashMap<String, String>();
         Set<String> seen = new HashSet<String>();
         UsageEvents.Event e = new UsageEvents.Event();
+        List<String> closing = new ArrayList<String>();
         while (ev.hasNextEvent()) {
             ev.getNextEvent(e);
             String pkg = e.getPackageName();
-            if (pkg == null || !pkgs.contains(pkg)) continue;
             int type = e.getEventType();
-            if (type != 1 && type != 2) continue;  // 1 = resumed, 2 = paused
-            String key = pkg + "/" + e.getClassName();
             long ts = e.getTimeStamp();
+
+            // A game that was killed or crashed never reports "paused". It still stopped being
+            // on screen when another app came to the front or the screen went off.
+            boolean screenOff = type == 16 || type == 17 || type == 26;   // non-interactive, keyguard, shutdown
+            if ((screenOff || (type == 1 && pkg != null)) && !open.isEmpty()) {
+                closing.clear();
+                for (Map.Entry<String, String> en : openPkg.entrySet()) {
+                    if (screenOff || !en.getValue().equals(pkg)) closing.add(en.getKey());
+                }
+                for (int ci = 0; ci < closing.size(); ci++) {
+                    String ck = closing.get(ci);
+                    Long from = open.remove(ck);
+                    String cp = openPkg.remove(ck);
+                    if (from == null || cp == null) continue;
+                    if (ts > from.longValue()) add(total, cp, ts - from.longValue());
+                    Long le = lastEnd.get(cp);
+                    if (le == null || le.longValue() < ts) lastEnd.put(cp, Long.valueOf(ts));
+                }
+            }
+
+            if (pkg == null || !pkgs.contains(pkg)) continue;
+            if (type != 1 && type != 2 && type != 23) continue;  // 1 = resumed, 2 = paused, 23 = stopped
+            String key = pkg + "/" + e.getClassName();
             if (type == 1) {
                 if (!open.containsKey(key)) {
                     open.put(key, Long.valueOf(ts));
@@ -1408,13 +1429,15 @@ public class MainActivity extends Activity {
                 long from = -1;
                 if (s != null) {
                     from = s.longValue();
-                } else if (!seen.contains(key)) {
+                } else if (type == 2 && !seen.contains(key)) {
                     from = start;   // was already on screen when the day began
                 }
                 seen.add(key);
-                if (from >= 0 && ts > from) add(total, pkg, ts - from);
-                Long le = lastEnd.get(pkg);
-                if (le == null || le.longValue() < ts) lastEnd.put(pkg, Long.valueOf(ts));
+                if (from >= 0 && ts > from) {
+                    add(total, pkg, ts - from);
+                    Long le = lastEnd.get(pkg);
+                    if (le == null || le.longValue() < ts) lastEnd.put(pkg, Long.valueOf(ts));
+                }
             }
         }
         long stop = Math.min(end, System.currentTimeMillis());
@@ -1493,6 +1516,19 @@ public class MainActivity extends Activity {
                 clr.putInt("kh:" + p, h);
             }
             if (clr != null) clr.commit();
+        }
+
+        if (access && prefs.getInt("fixRev", 0) < 1) {
+            SharedPreferences.Editor fx = prefs.edit();
+            for (String p : pkgs) {
+                for (int d = 0; d < DAYS; d++) {
+                    String[] key = new String[1];
+                    dayStart(d, key, map.get(p).dayHour);
+                    fx.remove("t:" + key[0] + ":" + p);
+                }
+                fx.remove("aa:" + p);
+            }
+            fx.putInt("fixRev", 1).commit();
         }
 
         Map<String, ?> stored = prefs.getAll();

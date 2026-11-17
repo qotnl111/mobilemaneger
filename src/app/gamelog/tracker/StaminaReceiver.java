@@ -215,11 +215,14 @@ public class StaminaReceiver extends BroadcastReceiver {
             UsageEvents.Event e = new UsageEvents.Event();
             while (ev != null && ev.hasNextEvent()) {
                 ev.getNextEvent(e);
-                if (!pkg.equals(e.getPackageName())) continue;
                 int type = e.getEventType();
-                if (type == 1) {
+                boolean mine = pkg.equals(e.getPackageName());
+                // another app in front, or the screen off, also ends the session
+                boolean ends = type == 16 || type == 17 || type == 26
+                        || (!mine && type == 1) || (mine && (type == 2 || type == 23));
+                if (mine && type == 1) {
                     if (open < 0) open = e.getTimeStamp();
-                } else if (type == 2 && open >= 0) {
+                } else if (ends && open >= 0) {
                     total += e.getTimeStamp() - open;
                     last = e.getTimeStamp();
                     open = -1;

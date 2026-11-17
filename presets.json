@@ -17,13 +17,10 @@
    "cap": 139,
    "regen": 6,
    "daily": -1,
-   "upd": 1794445200000,
+   "upd": 1795050000000,
    "updTime": true,
-   "updDur": 50400000
-  },
-  {
-   "pkg": "com.bandainamcoent.op_restaurant",
-   "name": "원피스 그랜드 레스토랑"
+   "updDur": 50400000,
+   "updCycle": 7
   },
   {
    "pkg": "com.garena.game.mho",
@@ -38,10 +35,6 @@
    "cap": 360,
    "regen": 7.12,
    "daily": -1
-  },
-  {
-   "pkg": "com.hottagames.nte",
-   "name": "이환"
   },
   {
    "pkg": "com.kakaogames.gdtskr",
@@ -73,7 +66,8 @@
    "name": "BrownDust II",
    "cap": 60,
    "regen": 0,
-   "daily": 9
+   "daily": 9,
+   "dayStart": 9
   },
   {
    "pkg": "com.p5xkr.samsung",
@@ -88,10 +82,6 @@
   {
    "pkg": "com.qookkagames.z1.gp.hk",
    "name": "Morimens"
-  },
-  {
-   "pkg": "com.stove.epic7.google",
-   "name": "에픽세븐"
   },
   {
    "pkg": "com.xd.ssrpgkr",
