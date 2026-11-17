@@ -1,6 +1,6 @@
 {
-  "versionCode": 21,
-  "versionName": "1.20",
+  "versionCode": 22,
+  "versionName": "1.21",
   "apk": "game-manager.apk",
-  "notes": "버그 수정: 미완료 처리 후 기준 시간만큼 더 플레이하면 다시 자동 완료"
+  "notes": "통계 화면 추가: 기간별 총 플레이 시간, 일별·요일별 그래프, 게임별 비중"
 }

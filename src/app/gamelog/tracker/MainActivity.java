@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.AppOpsManager;
 import android.app.DatePickerDialog;
+import android.app.Dialog;
 import android.app.TimePickerDialog;
 import android.app.usage.UsageEvents;
 import android.app.usage.UsageStatsManager;
@@ -310,6 +311,16 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         rlp.setMargins(dp(10), 0, 0, 0);
         row.addView(set, rlp);
+        TextView stats = button("통계", CARD, TEXT);
+        stats.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                showStats();
+            }
+        });
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.setMargins(dp(10), 0, 0, 0);
+        row.addView(stats, slp);
         root.addView(row);
 
         return root;
@@ -1762,6 +1773,363 @@ public class MainActivity extends Activity {
                 })
                 .setNegativeButton("취소", null)
                 .show();
+    }
+
+    // ---------- statistics ----------
+
+    static final int SERIES = 0xFF6EA8FF;   // the one hue every statistics bar uses
+
+    void showStats() {
+        final Dialog dlg = new Dialog(this, android.R.style.Theme_Material_NoActionBar);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(BG);
+        root.setFitsSystemWindows(true);
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(dp(20), dp(24), dp(20), dp(8));
+        top.addView(text("통계", 26, TEXT, true),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView close = button("닫기", CARD, TEXT);
+        close.setPadding(dp(16), dp(8), dp(16), dp(8));
+        close.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                dlg.dismiss();
+            }
+        });
+        top.addView(close);
+        root.addView(top);
+
+        final LinearLayout seg = new LinearLayout(this);
+        seg.setOrientation(LinearLayout.HORIZONTAL);
+        seg.setPadding(dp(20), dp(4), dp(20), dp(8));
+        root.addView(seg);
+
+        ScrollView sc = new ScrollView(this);
+        sc.setVerticalScrollBarEnabled(false);
+        final LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(20), dp(4), dp(20), dp(24));
+        sc.addView(body, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(sc, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        final int[] ranges = {7, 30, 0};
+        final String[] names = {"최근 7일", "최근 30일", "전체"};
+        final TextView[] tabs = new TextView[3];
+        for (int i = 0; i < 3; i++) {
+            final int idx = i;
+            tabs[i] = button(names[i], CARD, SUB);
+            tabs[i].setPadding(dp(14), dp(8), dp(14), dp(8));
+            tabs[i].setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    for (int j = 0; j < 3; j++) {
+                        tabs[j].setBackground(box(j == idx ? TEXT : CARD, 0, 12));
+                        tabs[j].setTextColor(j == idx ? BG : SUB);
+                    }
+                    fillStats(body, ranges[idx]);
+                }
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, 0, dp(8), 0);
+            seg.addView(tabs[i], lp);
+        }
+        dlg.setContentView(root);
+        dlg.show();
+        tabs[0].performClick();
+    }
+
+    static String mdOf(String key) {
+        try {
+            return Integer.parseInt(key.substring(4, 6)) + "/" + Integer.parseInt(key.substring(6, 8));
+        } catch (Exception e) {
+            return key;
+        }
+    }
+
+    TextView sectionTitle(String s) {
+        TextView t = text(s, 15, TEXT, true);
+        t.setPadding(0, dp(20), 0, dp(8));
+        return t;
+    }
+
+    View tile(String label, String value) {
+        LinearLayout b = new LinearLayout(this);
+        b.setOrientation(LinearLayout.VERTICAL);
+        b.setBackground(box(CARD, 0, 14));
+        b.setPadding(dp(12), dp(12), dp(12), dp(12));
+        b.addView(text(label, 11, SUB, false));
+        TextView v = text(value, 16, TEXT, true);
+        v.setPadding(0, dp(4), 0, 0);
+        b.addView(v);
+        return b;
+    }
+
+    /** One bar column: optional value on top, bar on a shared baseline, optional label below. */
+    View barColumn(long value, long max, int heightDp, String topLabel, String bottomLabel,
+            final String tip) {
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        if (topLabel != null) {
+            TextView tv = text(topLabel, 10, SUB, false);
+            tv.setGravity(Gravity.CENTER);
+            tv.setSingleLine(true);
+            col.addView(tv);
+        }
+        LinearLayout holder = new LinearLayout(this);
+        holder.setGravity(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        View bar = new View(this);
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(value > 0 ? SERIES : LINE);
+        float r = dp(3);
+        g.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});     // rounded data end only
+        bar.setBackground(g);
+        int h = value <= 0 || max <= 0 ? dp(2)
+                : Math.max(dp(2), (int) (dp(heightDp) * ((double) value / (double) max)));
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, h);
+        blp.setMargins(dp(1), 0, dp(1), 0);                        // gap between neighbours
+        holder.addView(bar, blp);
+        LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(heightDp));
+        hlp.setMargins(0, dp(2), 0, dp(4));
+        col.addView(holder, hlp);
+        if (bottomLabel != null) {
+            TextView bl = text(bottomLabel, 10, SUB, false);
+            bl.setGravity(Gravity.CENTER);
+            bl.setSingleLine(true);
+            col.addView(bl);
+        }
+        if (tip != null) {
+            col.setClickable(true);
+            col.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    Toast.makeText(MainActivity.this, tip, Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+        return col;
+    }
+
+    void fillStats(LinearLayout body, int range) {
+        body.removeAllViews();
+        Map<String, ?> all = prefs.getAll();
+        long mm = minMs();
+        int hour = resetHour();
+
+        // which days the period covers
+        int n = range;
+        if (n <= 0) {
+            String earliest = null;
+            for (String k : all.keySet()) {
+                if (!k.startsWith("t:") || k.length() < 12) continue;
+                String dk = k.substring(2, 10);
+                if (earliest == null || dk.compareTo(earliest) < 0) earliest = dk;
+            }
+            n = 1;
+            if (earliest != null) {
+                String[] key = new String[1];
+                for (int back = 0; back < 400; back++) {
+                    dayStart(back, key, hour);
+                    n = back + 1;
+                    if (key[0].compareTo(earliest) <= 0) break;
+                }
+            }
+        }
+        String[] keys = new String[n];
+        int[] dow = new int[n];
+        Map<String, Integer> index = new HashMap<String, Integer>();
+        Calendar cal = Calendar.getInstance();
+        for (int i = 0; i < n; i++) {                 // i = 0 is the oldest day
+            String[] key = new String[1];
+            long start = dayStart(n - 1 - i, key, hour);
+            keys[i] = key[0];
+            index.put(key[0], Integer.valueOf(i));
+            cal.setTimeInMillis(start);
+            dow[i] = cal.get(Calendar.DAY_OF_WEEK);   // 1 = Sunday
+        }
+
+        long[] perDay = new long[n];
+        final Map<String, Long> perGame = new HashMap<String, Long>();
+        Map<String, Integer> doneDays = new HashMap<String, Integer>();
+        long total = 0;
+        for (Map.Entry<String, ?> en : all.entrySet()) {
+            String k = en.getKey();
+            if (k.length() < 12 || k.charAt(10) != ':') continue;
+            boolean isTime = k.startsWith("t:"), isMark = k.startsWith("m:");
+            if (!isTime && !isMark) continue;
+            Integer idx = index.get(k.substring(2, 10));
+            if (idx == null) continue;
+            String pkg = k.substring(11);
+            if (isTime && en.getValue() instanceof Long) {
+                long v = ((Long) en.getValue()).longValue();
+                if (v <= 0) continue;
+                perDay[idx.intValue()] += v;
+                add(perGame, pkg, v);
+                total += v;
+                if (v >= mm) {
+                    Integer dd = doneDays.get(pkg);
+                    doneDays.put(pkg, Integer.valueOf(dd == null ? 1 : dd.intValue() + 1));
+                }
+            } else if (isMark && Boolean.TRUE.equals(en.getValue())) {
+                Object t = all.get("t:" + k.substring(2));
+                long v = t instanceof Long ? ((Long) t).longValue() : 0L;
+                if (v < mm) {                          // done by hand, not already counted by time
+                    Integer dd = doneDays.get(pkg);
+                    doneDays.put(pkg, Integer.valueOf(dd == null ? 1 : dd.intValue() + 1));
+                }
+            }
+        }
+
+        if (total <= 0) {
+            TextView none = text("이 기간에 쌓인 기록이 아직 없어요", 14, SUB, false);
+            none.setPadding(0, dp(24), 0, 0);
+            body.addView(none);
+            return;
+        }
+
+        int best = 0;
+        for (int i = 1; i < n; i++) if (perDay[i] > perDay[best]) best = i;
+
+        // headline numbers
+        LinearLayout tiles = new LinearLayout(this);
+        tiles.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams t1 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+        t1.setMargins(0, 0, dp(8), 0);
+        LinearLayout.LayoutParams t2 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+        t2.setMargins(0, 0, dp(8), 0);
+        LinearLayout.LayoutParams t3 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+        tiles.addView(tile("총 플레이 (" + n + "일)", fmt(total)), t1);
+        tiles.addView(tile("하루 평균", fmt(total / n)), t2);
+        tiles.addView(tile("최다 " + mdOf(keys[best]), fmt(perDay[best])), t3);
+        body.addView(tiles);
+
+        // daily totals, at most the last 30 days
+        int cn = Math.min(n, 30);
+        body.addView(sectionTitle(n > 30 ? "일별 플레이 시간 (최근 30일)" : "일별 플레이 시간"));
+        LinearLayout dayBox = new LinearLayout(this);
+        dayBox.setOrientation(LinearLayout.VERTICAL);
+        dayBox.setBackground(box(CARD, 0, 16));
+        dayBox.setPadding(dp(10), dp(12), dp(10), dp(12));
+        long dmax = 0;
+        for (int i = n - cn; i < n; i++) dmax = Math.max(dmax, perDay[i]);
+        dayBox.addView(text("최대 " + fmt(dmax) + " · 막대를 누르면 그날 시간", 11, SUB, false));
+        LinearLayout dayRow = new LinearLayout(this);
+        dayRow.setOrientation(LinearLayout.HORIZONTAL);
+        String week = "일월화수목금토";
+        for (int i = n - cn; i < n; i++) {
+            String bottom = cn <= 7 ? (i == n - 1 ? "오늘" : String.valueOf(week.charAt(dow[i] - 1))) : null;
+            dayRow.addView(barColumn(perDay[i], dmax, 84, null, bottom,
+                    mdOf(keys[i]) + " (" + week.charAt(dow[i] - 1) + ") · " + fmt(perDay[i])),
+                    new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        }
+        dayBox.addView(dayRow);
+        if (cn > 7) {
+            LinearLayout ends = new LinearLayout(this);
+            ends.setOrientation(LinearLayout.HORIZONTAL);
+            ends.addView(text(mdOf(keys[n - cn]), 10, SUB, false),
+                    new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            ends.addView(text("오늘", 10, SUB, false));
+            dayBox.addView(ends);
+        }
+        body.addView(dayBox);
+
+        // average per weekday, Monday first
+        if (n >= 7) {
+            body.addView(sectionTitle("요일별 평균"));
+            long[] wsum = new long[8];
+            int[] wcnt = new int[8];
+            for (int i = 0; i < n; i++) {
+                wsum[dow[i]] += perDay[i];
+                wcnt[dow[i]]++;
+            }
+            long wmax = 0;
+            long[] wavg = new long[8];
+            for (int d = 1; d <= 7; d++) {
+                wavg[d] = wcnt[d] > 0 ? wsum[d] / wcnt[d] : 0;
+                wmax = Math.max(wmax, wavg[d]);
+            }
+            LinearLayout wRow = new LinearLayout(this);
+            wRow.setOrientation(LinearLayout.HORIZONTAL);
+            wRow.setBackground(box(CARD, 0, 16));
+            wRow.setPadding(dp(10), dp(12), dp(10), dp(12));
+            int[] order = {2, 3, 4, 5, 6, 7, 1};
+            for (int j = 0; j < 7; j++) {
+                int d = order[j];
+                wRow.addView(barColumn(wavg[d], wmax, 64, shortFmt(wavg[d]),
+                        String.valueOf(week.charAt(d - 1)),
+                        week.charAt(d - 1) + "요일 평균 · " + fmt(wavg[d])),
+                        new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            }
+            body.addView(wRow);
+        }
+
+        // per game, most played first
+        body.addView(sectionTitle("게임별"));
+        List<String> order = new ArrayList<String>(perGame.keySet());
+        Collections.sort(order, new Comparator<String>() {
+            public int compare(String a, String b) {
+                long x = perGame.get(a).longValue(), y = perGame.get(b).longValue();
+                return x == y ? a.compareTo(b) : (x > y ? -1 : 1);
+            }
+        });
+        long gmax = order.isEmpty() ? 0 : perGame.get(order.get(0)).longValue();
+        for (int i = 0; i < order.size() && i < 20; i++) {
+            String pkg = order.get(i);
+            long v = perGame.get(pkg).longValue();
+            String label = pkg;
+            Drawable icon = null;
+            try {
+                ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+                label = String.valueOf(pm.getApplicationLabel(ai));
+                icon = pm.getApplicationIcon(ai);
+            } catch (Exception e) {
+                label = pkg + " (삭제됨)";
+            }
+            LinearLayout rowV = new LinearLayout(this);
+            rowV.setOrientation(LinearLayout.VERTICAL);
+            rowV.setBackground(box(CARD, 0, 14));
+            rowV.setPadding(dp(12), dp(10), dp(12), dp(10));
+
+            LinearLayout line = new LinearLayout(this);
+            line.setOrientation(LinearLayout.HORIZONTAL);
+            line.setGravity(Gravity.CENTER_VERTICAL);
+            ImageView iv = new ImageView(this);
+            if (icon != null) iv.setImageDrawable(icon);
+            line.addView(iv, new LinearLayout.LayoutParams(dp(28), dp(28)));
+            TextView nm = text(label, 14, TEXT, true);
+            nm.setSingleLine(true);
+            nm.setEllipsize(TextUtils.TruncateAt.END);
+            LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            nlp.setMargins(dp(10), 0, dp(8), 0);
+            line.addView(nm, nlp);
+            line.addView(text(fmt(v) + " · " + Math.round(100.0 * v / total) + "%", 13, TEXT, false));
+            rowV.addView(line);
+
+            LinearLayout track = new LinearLayout(this);
+            track.setBackground(box(LINE, 0, 3));
+            View fill = new View(this);
+            fill.setBackground(box(SERIES, 0, 3));
+            float frac = gmax > 0 ? (float) v / (float) gmax : 0f;
+            track.setWeightSum(1f);
+            track.addView(fill, new LinearLayout.LayoutParams(0, dp(6), Math.max(0.01f, frac)));
+            LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(6));
+            tlp.setMargins(0, dp(8), 0, dp(6));
+            rowV.addView(track, tlp);
+
+            Integer dd = doneDays.get(pkg);
+            rowV.addView(text("완료 " + (dd == null ? 0 : dd.intValue()) + "일 / " + n + "일", 11, SUB, false));
+
+            LinearLayout.LayoutParams rlp2 = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rlp2.setMargins(0, 0, 0, dp(8));
+            body.addView(rowV, rlp2);
+        }
     }
 
     // ---------- stamina notifications ----------
