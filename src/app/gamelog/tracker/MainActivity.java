@@ -155,6 +155,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refresh();
+        checkNewGames();
     }
 
     // ---------- UI ----------
@@ -1357,6 +1358,61 @@ public class MainActivity extends Activity {
         prefs.edit().putStringSet("pkgs", s).putBoolean("init", true).apply();
     }
 
+    /**
+     * Games installed after the last look. The first run only records what is installed
+     * now, so games the person removed from the list are not brought back.
+     */
+    void checkNewGames() {
+        List<ResolveInfo> l = launchables();
+        Set<String> seen = prefs.getStringSet("seenPk", null);
+        boolean first = seen == null;
+        seen = first ? new HashSet<String>() : new HashSet<String>(seen);
+        Set<String> have = tracked();
+        final List<String> fresh = new ArrayList<String>();
+        final List<String> names = new ArrayList<String>();
+        for (int i = 0; i < l.size(); i++) {
+            ResolveInfo r = l.get(i);
+            if (r.activityInfo == null || !isGame(r.activityInfo.applicationInfo)) continue;
+            String p = r.activityInfo.packageName;
+            if (p == null || p.equals(getPackageName()) || seen.contains(p)) continue;
+            seen.add(p);
+            if (first || have.contains(p) || fresh.contains(p)) continue;
+            fresh.add(p);
+            String n;
+            try {
+                n = String.valueOf(r.loadLabel(pm));
+            } catch (Exception e) {
+                n = p;
+            }
+            names.add(n);
+        }
+        prefs.edit().putStringSet("seenPk", seen).apply();
+        if (fresh.isEmpty()) return;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < names.size(); i++) sb.append(i > 0 ? ", " : "").append(names.get(i));
+        if (prefs.getBoolean("autoNew", true)) {
+            Set<String> t = tracked();
+            t.addAll(fresh);
+            saveTracked(t);
+            refresh();
+            Toast.makeText(this, "새 게임 추가: " + sb, Toast.LENGTH_LONG).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("새 게임을 찾았어요")
+                .setMessage(sb + "\n\n목록에 추가할까요?")
+                .setPositiveButton("추가", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        Set<String> t = tracked();
+                        t.addAll(fresh);
+                        saveTracked(t);
+                        refresh();
+                    }
+                })
+                .setNegativeButton("안 할래요", null)
+                .show();
+    }
+
     /** Start of the play day that lies `back` days before today, plus its storage key. */
     long dayStart(int back, String[] keyOut) {
         return dayStart(back, keyOut, resetHour());
@@ -1717,6 +1773,7 @@ public class MainActivity extends Activity {
                 "정렬: " + (prefs.getInt("sortMode", 1) == 1 ? "가득까지 남은 시간 짧은 순" : "스테미나 많이 찬 순"),
                 "스테미나 가득 알림: " + (notifOn() ? "켜짐 (무음)" : "꺼짐"),
                 "업데이트 시작·끝 알림: " + (prefs.getBoolean("notifUpd", true) ? "켜짐 (무음)" : "꺼짐"),
+                "새 게임 설치되면: " + (prefs.getBoolean("autoNew", true) ? "자동으로 추가" : "추가할지 물어보기"),
                 "설정 내보내기",
                 "설정 가져오기 (붙여넣기)",
                 "저장소에서 설정 받기",
@@ -1733,9 +1790,14 @@ public class MainActivity extends Activity {
                         else if (which == 4) showSortDialog();
                         else if (which == 5) toggleNotif();
                         else if (which == 6) toggleUpdNotif();
-                        else if (which == 7) showExport();
-                        else if (which == 8) showImport();
-                        else if (which == 9) fetchPresets();
+                        else if (which == 7) {
+                            prefs.edit().putBoolean("autoNew", !prefs.getBoolean("autoNew", true)).apply();
+                            Toast.makeText(MainActivity.this, prefs.getBoolean("autoNew", true)
+                                    ? "새 게임은 자동으로 추가돼요" : "새 게임이 있으면 물어볼게요", Toast.LENGTH_SHORT).show();
+                        }
+                        else if (which == 8) showExport();
+                        else if (which == 9) showImport();
+                        else if (which == 10) fetchPresets();
                         else checkUpdate();
                     }
                 })
