@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>게임 관리 · 오늘</title>
+<style>
+:root{--bg:#12141c;--panel:#1c2030;--ink:#eef0ff;--mute:#9aa0c0;--ok:#5be49b;--todo:#ffd166;--line:#2d3350}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Noto Sans KR",sans-serif;padding:16px;max-width:720px;margin:auto}
+h1{font-size:20px;margin:4px 0 2px}.sub{color:var(--mute);font-size:13px}
+.row{display:flex;gap:8px;align-items:center;margin:10px 0}
+input,select,button{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit}
+button{cursor:pointer}
+.g{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0}
+.g.done{opacity:.7}.top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.nm{font-weight:700}.tag{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid}
+.tag.ok{color:var(--ok);border-color:var(--ok)}.tag.todo{color:var(--todo);border-color:var(--todo)}
+.bar{height:6px;background:#0c0e16;border-radius:4px;margin:8px 0 4px;overflow:hidden}.bar i{display:block;height:100%;background:var(--ok)}
+.dev{color:var(--mute);font-size:13px}.week{display:flex;gap:3px;margin-top:6px}.week b{flex:1;height:8px;border-radius:2px;background:#0c0e16}.week b.on{background:var(--ok)}
+#err{color:#ff6b81;font-size:13px}
+</style></head><body>
+<h1>게임 관리</h1>
+<div class="sub" id="meta">불러오는 중…</div>
+<div class="row" id="setup" style="display:none"><input id="key" type="password" placeholder="키" style="flex:1"><button id="save">저장</button></div>
+<div class="row"><span class="sub">완료 기준</span><select id="min"><option>1</option><option>3</option><option selected>5</option><option>10</option><option>15</option><option>30</option></select><span class="sub">분</span><button id="re">새로고침</button></div>
+<div id="err"></div><div id="list"></div>
+<script>
+const $=id=>document.getElementById(id),RESET=4;
+const DEV={phone:"폰",pc:"PC"};
+const pad=n=>String(n).padStart(2,"0");
+function dayKey(back){const d=new Date(Date.now()-RESET*3600e3-back*86400e3);return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())}
+const mins=ms=>Math.floor(ms/60000);
+function key(){return localStorage.getItem("gmkey")||""}
+async function api(path){const r=await fetch(path,{headers:{"x-gm-key":key()}});if(r.status==401)throw new Error("키가 맞지 않아요");if(!r.ok)throw new Error("서버 오류 "+r.status);return r.json()}
+async function load(){
+  $("err").textContent="";
+  if(!key()){$("setup").style.display="flex";$("meta").textContent="키를 입력해 주세요";return}
+  $("setup").style.display="none";
+  try{
+    const days=[0,1,2,3,4,5,6].map(dayKey);
+    const [t,w]=await Promise.all([api("/api/day?day="+days[0]),api("/api/week?days="+days.join(","))]);
+    const need=+$("min").value*60000;
+    const names=Object.keys(t.games);
+    const rows=names.map(n=>{const g=t.games[n],tot=Object.values(g.devices).reduce((a,b)=>a+b,0);return{n,g,tot,done:tot>=need||t.marks[n]===true}});
+    rows.sort((a,b)=>a.done-b.done||a.n.localeCompare(b.n));
+    const todo=rows.filter(r=>!r.done).length;
+    $("meta").textContent=days[0]+" · 오늘 "+(rows.length-todo)+" / "+rows.length+" 완료 · 기록 있는 게임만 보여요";
+    $("list").innerHTML=rows.map(r=>{
+      const dev=Object.entries(r.g.devices).map(([d,ms])=>(DEV[d]||d)+" "+mins(ms)+"분").join(" · ");
+      const wk=days.slice().reverse().map(d=>'<b class="'+((w[d]&&w[d][r.n]>=need)?"on":"")+'"></b>').join("");
+      return '<div class="g'+(r.done?" done":"")+'"><div class="top"><span class="nm">'+(r.g.title||r.n)+'</span><span class="tag '+(r.done?"ok":"todo")+'">'+(r.done?"완료":"아직 안 함")+'</span></div>'
+        +'<div class="bar"><i style="width:'+Math.min(100,100*r.tot/need)+'%"></i></div><div class="dev">총 '+mins(r.tot)+'분 · '+dev+'</div><div class="week" title="최근 7일">'+wk+'</div></div>'}).join("")||'<div class="sub">아직 올라온 기록이 없어요</div>';
+  }catch(e){$("err").textContent=e.message}
+}
+$("save").onclick=()=>{localStorage.setItem("gmkey",$("key").value.trim());load()};
+$("re").onclick=load;$("min").onchange=load;
+load();setInterval(load,60000);
+</script></body></html>

@@ -116,6 +116,7 @@ public class MainActivity extends Activity {
         boolean played;
         boolean manual;
         long base = -1;     // play time when marked not done today; done again at base + threshold
+        long pc;            // today's play time reported by other devices (PC), already included in days[0]
         int streak;         // days done in a row, alive only if done today or yesterday
         int missed = -1;    // days in a row not done, counting today; -1 = no record
         int ownHour = -1;   // this game's own day start, -1 = follow the global setting
@@ -156,6 +157,7 @@ public class MainActivity extends Activity {
         super.onResume();
         refresh();
         checkNewGames();
+        syncNow(true);
     }
 
     // ---------- UI ----------
@@ -632,7 +634,7 @@ public class MainActivity extends Activity {
         detail.addView(top);
 
         String sbadge = streakText(it);
-        TextView st = text("오늘 " + fmt(it.days[0]) + " · 7일 " + fmt(it.week) + " · 누적 " + fmt(it.total)
+        TextView st = text("오늘 " + fmt(it.days[0]) + (it.pc > 0 ? " (PC " + fmt(it.pc) + ")" : "") + " · 7일 " + fmt(it.week) + " · 누적 " + fmt(it.total)
                 + (sbadge != null ? "\n" + sbadge : ""), 13, SUB, false);
         st.setLineSpacing(dp(3), 1f);
         st.setPadding(0, dp(6), 0, dp(12));
@@ -1635,6 +1637,18 @@ public class MainActivity extends Activity {
                     v = was;   // system history may have expired; trust our own record
                 }
                 Item it = map.get(p);
+                if (d == 0) {
+                    Object rc = stored.get("c:" + key[0] + ":" + p);
+                    if (rc instanceof Long && ((Long) rc).longValue() > 0) {
+                        it.pc = ((Long) rc).longValue();
+                        v += it.pc;
+                        Object rl = stored.get("cl:" + key[0] + ":" + p);
+                        if (v >= minMs() && rl instanceof Long
+                                && !blocked(stored.get("x:" + key[0] + ":" + p), v, minMs())) {
+                            it.autoAnchor = Math.max(it.autoAnchor, ((Long) rl).longValue());
+                        }
+                    }
+                }
                 boolean man = Boolean.TRUE.equals(stored.get("m:" + key[0] + ":" + p));
                 Object xo = stored.get("x:" + key[0] + ":" + p);      // marked not done by hand
                 if (d == 0 && Boolean.TRUE.equals(xo)) {             // older versions stored only a flag
@@ -1762,6 +1776,171 @@ public class MainActivity extends Activity {
         return (min / 60L) + "시간 " + (min % 60L) + "분";
     }
 
+    // ---------- sync with the home server (PC and phone share play records) ----------
+
+    boolean syncOn() {
+        return prefs.getString("syncUrl", "").trim().length() > 0 && prefs.getString("syncKey", "").trim().length() > 0;
+    }
+
+    static String normName(String s) {
+        return s.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+    }
+
+    static String dashDay(String k) {
+        return k.substring(0, 4) + "-" + k.substring(4, 6) + "-" + k.substring(6, 8);
+    }
+
+    String syncCall(String method, String url, String key, String body) throws IOException {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        try {
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(12000);
+            c.setUseCaches(false);
+            c.setRequestMethod(method);
+            c.setRequestProperty("x-gm-key", key);
+            if (body != null) {
+                byte[] b = body.getBytes("UTF-8");
+                c.setDoOutput(true);
+                c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                c.setFixedLengthStreamingMode(b.length);
+                c.getOutputStream().write(b);
+            }
+            int code = c.getResponseCode();
+            if (code == 401) throw new IOException("키가 맞지 않아요");
+            if (code != 200) throw new IOException("HTTP " + code);
+            InputStream in = c.getInputStream();
+            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            in.close();
+            return new String(bo.toByteArray(), "UTF-8");
+        } finally {
+            c.disconnect();
+        }
+    }
+
+    /** Upload this phone's play time, then fetch what other devices played today. */
+    void syncNow(final boolean quiet) {
+        if (!syncOn()) return;
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    String base = prefs.getString("syncUrl", "").trim();
+                    while (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+                    if (!base.startsWith("http")) base = "http://" + base;
+                    String key = prefs.getString("syncKey", "").trim();
+                    JSONArray entries = new JSONArray();
+                    Map<String, String> todayKey = new HashMap<String, String>();   // pkg -> today's key
+                    Map<String, String> nameOf = new HashMap<String, String>();     // pkg -> plain name
+                    for (String p : tracked()) {
+                        String label;
+                        try {
+                            label = String.valueOf(pm.getApplicationLabel(pm.getApplicationInfo(p, 0)));
+                        } catch (Exception e) {
+                            continue;
+                        }
+                        nameOf.put(p, normName(label));
+                        int h = prefs.getInt("rh:" + p, -1);
+                        if (h < 0 || h > 23) h = resetHour();
+                        for (int d = 0; d < 2; d++) {
+                            String[] k = new String[1];
+                            dayStart(d, k, h);
+                            if (d == 0) todayKey.put(p, k[0]);
+                            Object o = prefs.getAll().get("t:" + k[0] + ":" + p);
+                            long ms = (o instanceof Long) ? ((Long) o).longValue() : 0L;
+                            if (ms <= 0) continue;
+                            JSONObject e = new JSONObject();
+                            e.put("day", dashDay(k[0]));
+                            e.put("game", label);
+                            e.put("ms", ms);
+                            e.put("lastEnd", d == 0 ? prefs.getLong("aa:" + p, 0L) : 0L);
+                            entries.put(e);
+                        }
+                    }
+                    if (entries.length() > 0) {
+                        JSONObject body = new JSONObject();
+                        body.put("device", "phone");
+                        body.put("entries", entries);
+                        syncCall("POST", base + "/api/play", key, body.toString());
+                    }
+                    Set<String> days = new HashSet<String>(todayKey.values());
+                    SharedPreferences.Editor ed = prefs.edit();
+                    for (String dk : days) {
+                        JSONObject r = new JSONObject(syncCall("GET", base + "/api/day?day=" + dashDay(dk), key, null));
+                        JSONObject games = r.optJSONObject("games");
+                        if (games == null) continue;
+                        for (Map.Entry<String, String> te : todayKey.entrySet()) {
+                            if (!te.getValue().equals(dk)) continue;
+                            JSONObject g = games.optJSONObject(nameOf.get(te.getKey()));
+                            long other = 0, last = 0;
+                            if (g != null) {
+                                JSONObject dv = g.optJSONObject("devices");
+                                if (dv != null) {
+                                    java.util.Iterator<String> it = dv.keys();
+                                    while (it.hasNext()) {
+                                        String dn = it.next();
+                                        if (!"phone".equals(dn)) other += dv.optLong(dn, 0L);
+                                    }
+                                }
+                                last = g.optLong("lastEnd", 0L);
+                            }
+                            ed.putLong("c:" + dk + ":" + te.getKey(), other);
+                            if (other > 0) ed.putLong("cl:" + dk + ":" + te.getKey(), last);
+                        }
+                    }
+                    ed.putLong("syncAt", System.currentTimeMillis()).apply();
+                    ui.post(new Runnable() {
+                        public void run() {
+                            if (!isFinishing()) refresh();
+                        }
+                    });
+                    if (!quiet) toast("동기화했어요");
+                } catch (Exception e) {
+                    if (!quiet) toast("동기화하지 못했어요 (" + e.getMessage() + ")");
+                }
+            }
+        }).start();
+    }
+
+    void showSyncDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        final EditText url = new EditText(this);
+        url.setHint("서버 주소 (예: http://100.x.x.x:8700)");
+        url.setSingleLine(true);
+        url.setText(prefs.getString("syncUrl", ""));
+        final EditText key = new EditText(this);
+        key.setHint("키");
+        key.setSingleLine(true);
+        key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        key.setText(prefs.getString("syncKey", ""));
+        box.addView(url);
+        box.addView(key);
+        long at = prefs.getLong("syncAt", 0L);
+        new AlertDialog.Builder(this)
+                .setTitle("PC·폰 동기화")
+                .setMessage("컴퓨터에서 한 플레이 시간이 오늘 기록에 더해져요."
+                        + (at > 0 ? "\n마지막 동기화: " + new SimpleDateFormat("M월 d일 HH:mm", Locale.KOREA).format(new Date(at)) : ""))
+                .setView(box)
+                .setPositiveButton("저장하고 동기화", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        prefs.edit().putString("syncUrl", url.getText().toString().trim())
+                                .putString("syncKey", key.getText().toString().trim()).apply();
+                        syncNow(false);
+                    }
+                })
+                .setNeutralButton("끄기", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        prefs.edit().remove("syncUrl").remove("syncKey").apply();
+                        refresh();
+                    }
+                })
+                .setNegativeButton("닫기", null)
+                .show();
+    }
+
     // ---------- settings ----------
 
     void showSettings() {
@@ -1774,6 +1953,7 @@ public class MainActivity extends Activity {
                 "스테미나 가득 알림: " + (notifOn() ? "켜짐 (무음)" : "꺼짐"),
                 "업데이트 시작·끝 알림: " + (prefs.getBoolean("notifUpd", true) ? "켜짐 (무음)" : "꺼짐"),
                 "새 게임 설치되면: " + (prefs.getBoolean("autoNew", true) ? "자동으로 추가" : "추가할지 물어보기"),
+                "PC·폰 동기화: " + (syncOn() ? "켜짐" : "꺼짐"),
                 "설정 내보내기",
                 "설정 가져오기 (붙여넣기)",
                 "저장소에서 설정 받기",
@@ -1795,9 +1975,10 @@ public class MainActivity extends Activity {
                             Toast.makeText(MainActivity.this, prefs.getBoolean("autoNew", true)
                                     ? "새 게임은 자동으로 추가돼요" : "새 게임이 있으면 물어볼게요", Toast.LENGTH_SHORT).show();
                         }
-                        else if (which == 8) showExport();
-                        else if (which == 9) showImport();
-                        else if (which == 10) fetchPresets();
+                        else if (which == 8) showSyncDialog();
+                        else if (which == 9) showExport();
+                        else if (which == 10) showImport();
+                        else if (which == 11) fetchPresets();
                         else checkUpdate();
                     }
                 })

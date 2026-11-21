@@ -1,0 +1,15 @@
+[Unit]
+Description=Game Manager sync server
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/gm-sync
+Environment=GM_PORT=8700
+Environment=GM_DB=/home/ubuntu/gm-sync/gm.db
+EnvironmentFile=/home/ubuntu/gm-sync/.env
+ExecStart=/usr/bin/python3 /home/ubuntu/gm-sync/server.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

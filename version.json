@@ -1,6 +1,6 @@
 {
-  "versionCode": 24,
-  "versionName": "1.23",
+  "versionCode": 25,
+  "versionName": "1.24",
   "apk": "game-manager.apk",
-  "notes": "새 게임 자동 추가: 새로 설치한 게임을 앱을 열 때 찾아서 목록에 추가하거나 추가할지 물어봄 (설정에서 선택)"
+  "notes": "PC·폰 동기화: 설정에서 서버 주소와 키를 넣으면 컴퓨터에서 한 플레이 시간이 오늘 기록에 더해져요 (서버와 PC 프로그램은 sync 폴더)"
 }

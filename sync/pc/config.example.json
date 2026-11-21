@@ -1,0 +1,11 @@
+{
+  "server": "http://서버주소:8700",
+  "key": "서버에 설정한 키",
+  "intervalSec": 30,
+  "resetHour": 4,
+  "games": [
+    { "name": "젠레스 존 제로", "process": "ZenlessZoneZero" },
+    { "name": "명조:워더링 웨이브", "process": "Client-Win64-Shipping" },
+    { "name": "BrownDust II", "process": "BrownDust II", "dayStart": 9 }
+  ]
+}
