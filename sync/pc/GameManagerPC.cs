@@ -454,6 +454,13 @@ class MainForm : Form
             throw;
         }
     }
+    // 이름을 바꾼 게임의 예전 이름으로 올라가 있던 PC 기록을 서버에서 지운다 (카드가 둘로 남는 것 방지)
+    void Forget(string oldName)
+    {
+        if (cfg.server == "" || cfg.key == "") return;
+        string url = cfg.server + "/api/forget", body = Ser.Serialize(new Dictionary<string, object> { { "device", "pc" }, { "game", oldName } });
+        ThreadPool.QueueUserWorkItem(_ => { try { Http("POST", url, body); } catch { } });
+    }
     void Upload(List<Dictionary<string, object>> entries)
     {
         if (cfg.server == "" || cfg.key == "") return;
@@ -596,7 +603,7 @@ class MainForm : Form
                 if (MessageBox.Show("이 프로그램은 이미 '" + dup.name + "'(으)로 기록 중이에요.\n새로 만들지 않고 이름을 '" + name + "'(으)로 바꿀까요?", "게임 추가", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
                 string old = dup.name;
                 foreach (var k in state.Keys.Where(k => k.EndsWith("|" + old)).ToList()) { var nk = k.Substring(0, k.Length - old.Length) + name; state[nk] = state[k]; state.Remove(k); }
-                dup.name = name; SaveConfig(); SaveState(); Tick(); Reload(); return;
+                Forget(old); dup.name = name; SaveConfig(); SaveState(); Tick(); Reload(); return;
             }
             if (same != null)
             {
@@ -646,7 +653,7 @@ class MainForm : Form
             if (f.ShowDialog(this) != DialogResult.OK || list.SelectedItem == null) return;
             string nn = (string)list.SelectedItem, old = g.name;
             foreach (var k in state.Keys.Where(k => k.EndsWith("|" + old)).ToList()) { var nk = k.Substring(0, k.Length - old.Length) + nn; state[nk] = state[k]; state.Remove(k); }
-            g.name = nn; panel.SelectedName = null; SaveConfig(); SaveState(); Tick(); Reload();
+            Forget(old); g.name = nn; panel.SelectedName = null; SaveConfig(); SaveState(); Tick(); Reload();
         }
     }
     void RemoveGame()

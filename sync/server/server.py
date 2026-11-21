@@ -173,6 +173,16 @@ class H(BaseHTTPRequestHandler):
                         c.execute("INSERT INTO cfg (game, reset) VALUES (?,?) ON CONFLICT(game) DO UPDATE SET reset=excluded.reset", (game, rh))
                     n_ok += 1
             return self.send(200, {"saved": n_ok})
+        if self.path == "/api/forget":
+            # a device removes its own records of a game (used when the game is renamed on that device)
+            dev, game = str(data.get("device", ""))[:20], norm(data.get("game", ""))
+            if not dev or not game:
+                return self.send(400, {"error": "arg"})
+            with LOCK, db() as c:
+                n = c.execute("DELETE FROM play WHERE game=? AND device=?", (game, dev)).rowcount
+                if not c.execute("SELECT 1 FROM play WHERE game=? LIMIT 1", (game,)).fetchone():
+                    c.execute("DELETE FROM cfg WHERE game=?", (game,))
+            return self.send(200, {"deleted": n})
         if self.path == "/api/mark":
             day, game = str(data.get("day", "")), norm(data.get("game", ""))
             if not DAY_RE.match(day) or not game:
