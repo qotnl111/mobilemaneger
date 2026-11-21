@@ -323,6 +323,11 @@ class MainForm : Form
         if (cfg == null) cfg = new Cfg();
         if (cfg.games == null) cfg.games = new List<Game>();
         cfg.server = (cfg.server ?? "").TrimEnd('/');
+        // 같은 프로그램이 두 이름으로 등록돼 있으면 같은 플레이가 두 번 쌓이므로 처음 것만 남긴다
+        var uniq = new List<Game>();
+        foreach (var g in cfg.games)
+            if (!uniq.Any(u => u.process == g.process && (u.windowTitle ?? "") == (g.windowTitle ?? "") && (u.processPath ?? "") == (g.processPath ?? ""))) uniq.Add(g);
+        cfg.games = uniq;
     }
     void SaveConfig() { try { File.WriteAllText(CfgPath, Ser.Serialize(cfg), new UTF8Encoding(false)); } catch { } }
     void LoadState()
@@ -486,6 +491,13 @@ class MainForm : Form
     }
 
     // ---- 게임 추가/제거/설정
+    static readonly Dictionary<string, string[]> Alias = new Dictionary<string, string[]>
+    {
+        { "zenlesszonezero", new[] { "젠레스" } }, { "p5x", new[] { "페르소나" } }, { "soc", new[] { "콘발라리아" } },
+        { "wutheringwaves", new[] { "명조" } }, { "client-win64-shipping", new[] { "명조" } }, { "browndust", new[] { "browndust" } },
+        { "limbus", new[] { "림버스", "limbus" } }, { "endfield", new[] { "엔드필드" } }, { "umamusume", new[] { "우마무스메" } },
+        { "worldflipper", new[] { "worldflipper" } }, { "morimens", new[] { "morimens" } }, { "mho", new[] { "mhoutlanders" } }, { "langrisser", new[] { "랑그릿사" } }
+    };
     void AddGame()
     {
         const string SEP = "   —   ";
@@ -503,11 +515,12 @@ class MainForm : Form
             var tName = new ComboBox { Left = 104, Top = 278, Width = 338, DropDownStyle = ComboBoxStyle.DropDown, FlatStyle = FlatStyle.Flat };
             foreach (var t in PhoneOnlyTitles(true)) tName.Items.Add(t);
             string autoName = "";
-            var lHour = new Label { Left = 12, Top = 316, Width = 90, Text = "하루 시작" };
-            var cHour = new ComboBox { Left = 104, Top = 312, Width = 120, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat };
+            var warn = new Label { Left = 104, Top = 304, Width = 340, Height = 18, Font = new Font("맑은 고딕", 8.5f), Text = "" };
+            var lHour = new Label { Left = 12, Top = 336, Width = 90, Text = "하루 시작" };
+            var cHour = new ComboBox { Left = 104, Top = 332, Width = 120, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat };
             cHour.Items.Add("기본 (" + cfg.resetHour + "시)"); for (int h = 0; h < 24; h++) cHour.Items.Add(h + "시"); cHour.SelectedIndex = 0;
-            var ok = new Button { Text = "추가", Left = 280, Top = 350, Width = 80, DialogResult = DialogResult.OK };
-            var cancel = new Button { Text = "취소", Left = 362, Top = 350, Width = 80, DialogResult = DialogResult.Cancel };
+            var ok = new Button { Text = "추가", Left = 280, Top = 372, Width = 80, DialogResult = DialogResult.OK };
+            var cancel = new Button { Text = "취소", Left = 362, Top = 372, Width = 80, DialogResult = DialogResult.Cancel };
             list.SelectedIndexChanged += (s, e) =>
             {
                 if (list.SelectedItem == null || !(tName.Text == "" || tName.Text == autoName)) return;
@@ -520,11 +533,31 @@ class MainForm : Form
                     string nt = Norm(t);
                     if (nt.Length >= 3 && (nt == np || nt == nw || (np.Length >= 3 && (nt.Contains(np) || np.Contains(nt))) || (nw.Length >= 3 && (nw.Contains(nt) || nt.Contains(nw))))) { guess = t; break; }
                 }
+                if (guess == null)
+                {
+                    // 자주 쓰는 게임은 프로세스 이름 → 폰 게임 이름 별칭으로 찾는다
+                    foreach (var al in Alias)
+                    {
+                        if (!(np.Contains(al.Key) || nw.Contains(al.Key))) continue;
+                        foreach (var t in PhoneOnlyTitles(true)) { if (al.Value.Any(tok => Norm(t).Contains(Norm(tok)))) { guess = t; break; } }
+                        if (guess != null) break;
+                    }
+                }
                 autoName = guess ?? parts[0]; tName.Text = autoName;
             };
-            f.Controls.AddRange(new Control[] { info, list, lName, tName, lHour, cHour, ok, cancel });
+            Action checkName = () =>
+            {
+                string tx = tName.Text.Trim(); var pts = PhoneOnlyTitles(true);
+                if (pts.Count == 0) { warn.Text = ""; return; }
+                bool hit = pts.Any(t => Norm(t) == Norm(tx));
+                warn.Text = hit ? "✓ 폰 게임과 같은 이름이에요 (한 카드로 합쳐져요)" : "! 폰에 없는 이름이에요 — 폰 게임이면 ▼ 목록에서 골라야 합쳐져요";
+                warn.ForeColor = hit ? Theme.DONE : Theme.TODO;
+            };
+            tName.TextChanged += (s, e) => checkName();
+            tName.SelectedIndexChanged += (s, e) => checkName();
+            f.Controls.AddRange(new Control[] { info, list, lName, tName, warn, lHour, cHour, ok, cancel });
             Theme.Dark(f); Theme.Btn(ok, true); ok.AutoSize = false; cancel.AutoSize = false; ok.Size = cancel.Size = new Size(80, 30);
-            f.AcceptButton = ok; f.CancelButton = cancel;
+            f.Height = 460; f.AcceptButton = ok; f.CancelButton = cancel;
             if (f.ShowDialog(this) != DialogResult.OK || list.SelectedItem == null) return;
             var sp = ((string)list.SelectedItem).Split(new[] { SEP }, StringSplitOptions.None);
             string proc = sp[0], wtitle = "";
@@ -537,6 +570,15 @@ class MainForm : Form
             string exe = "";
             try { var ps = Process.GetProcessesByName(proc); if (ps.Length > 0) exe = ps[0].MainModule.FileName; } catch { }
             var same = cfg.games.FirstOrDefault(g => Norm(g.name) == Norm(name));
+            // 같은 프로그램을 다른 이름으로 이미 기록 중이면 새로 만들지 않고 그 게임의 이름만 바꾼다 (같은 플레이가 두 번 쌓이는 것 방지)
+            var dup = cfg.games.FirstOrDefault(g => g.process == proc && (g.windowTitle ?? "") == wtitle && Norm(g.name) != Norm(name));
+            if (same == null && dup != null)
+            {
+                if (MessageBox.Show("이 프로그램은 이미 '" + dup.name + "'(으)로 기록 중이에요.\n새로 만들지 않고 이름을 '" + name + "'(으)로 바꿀까요?", "게임 추가", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+                string old = dup.name;
+                foreach (var k in state.Keys.Where(k => k.EndsWith("|" + old)).ToList()) { var nk = k.Substring(0, k.Length - old.Length) + name; state[nk] = state[k]; state.Remove(k); }
+                dup.name = name; SaveConfig(); SaveState(); Tick(); Reload(); return;
+            }
             if (same != null)
             {
                 // 이미 등록된 게임이면 막지 않고, 어떤 프로그램을 이 게임으로 볼지만 바꿔 준다
