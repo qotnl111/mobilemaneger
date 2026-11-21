@@ -22,10 +22,10 @@ button{cursor:pointer}
 <div class="row"><span class="sub">완료 기준</span><select id="min"><option>1</option><option>3</option><option selected>5</option><option>10</option><option>15</option><option>30</option></select><span class="sub">분</span><button id="re">새로고침</button></div>
 <div id="err"></div><div id="list"></div>
 <script>
-const $=id=>document.getElementById(id),RESET=4;
+const $=id=>document.getElementById(id);
+const esc=x=>String(x).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const DEV={phone:"폰",pc:"PC"};
 const pad=n=>String(n).padStart(2,"0");
-function dayKey(back){const d=new Date(Date.now()-RESET*3600e3-back*86400e3);return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())}
 const mins=ms=>Math.floor(ms/60000);
 function key(){return localStorage.getItem("gmkey")||""}
 async function api(path){const r=await fetch(path,{headers:{"x-gm-key":key()}});if(r.status==401)throw new Error("키가 맞지 않아요");if(!r.ok)throw new Error("서버 오류 "+r.status);return r.json()}
@@ -34,18 +34,17 @@ async function load(){
   if(!key()){$("setup").style.display="flex";$("meta").textContent="키를 입력해 주세요";return}
   $("setup").style.display="none";
   try{
-    const days=[0,1,2,3,4,5,6].map(dayKey);
-    const [t,w]=await Promise.all([api("/api/day?day="+days[0]),api("/api/week?days="+days.join(","))]);
+    const d=new Date(),loc=d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+"T"+pad(d.getHours())+":"+pad(d.getMinutes());
+    const t=await api("/api/overview?local="+loc);
     const need=+$("min").value*60000;
-    const names=Object.keys(t.games);
-    const rows=names.map(n=>{const g=t.games[n],tot=Object.values(g.devices).reduce((a,b)=>a+b,0);return{n,g,tot,done:tot>=need||t.marks[n]===true}});
+    const rows=Object.keys(t.games).map(n=>{const g=t.games[n],tot=Object.values(g.devices).reduce((a,b)=>a+b,0);return{n,g,tot,done:tot>=need||g.done===true}});
     rows.sort((a,b)=>a.done-b.done||a.n.localeCompare(b.n));
     const todo=rows.filter(r=>!r.done).length;
-    $("meta").textContent=days[0]+" · 오늘 "+(rows.length-todo)+" / "+rows.length+" 완료 · 기록 있는 게임만 보여요";
+    $("meta").textContent="오늘 "+(rows.length-todo)+" / "+rows.length+" 완료 · 기록 있는 게임만 보여요";
     $("list").innerHTML=rows.map(r=>{
-      const dev=Object.entries(r.g.devices).map(([d,ms])=>(DEV[d]||d)+" "+mins(ms)+"분").join(" · ");
-      const wk=days.slice().reverse().map(d=>'<b class="'+((w[d]&&w[d][r.n]>=need)?"on":"")+'"></b>').join("");
-      return '<div class="g'+(r.done?" done":"")+'"><div class="top"><span class="nm">'+(r.g.title||r.n)+'</span><span class="tag '+(r.done?"ok":"todo")+'">'+(r.done?"완료":"아직 안 함")+'</span></div>'
+      const dev=Object.entries(r.g.devices).map(([d,ms])=>esc(DEV[d]||d)+" "+mins(ms)+"분").join(" · ");
+      const wk=r.g.week.slice().reverse().map(ms=>'<b class="'+(ms>=need?"on":"")+'"></b>').join("");
+      return '<div class="g'+(r.done?" done":"")+'"><div class="top"><span class="nm">'+esc(r.g.title||r.n)+'</span><span class="tag '+(r.done?"ok":"todo")+'">'+(r.done?"완료":"아직 안 함")+'</span></div>'
         +'<div class="bar"><i style="width:'+Math.min(100,100*r.tot/need)+'%"></i></div><div class="dev">총 '+mins(r.tot)+'분 · '+dev+'</div><div class="week" title="최근 7일">'+wk+'</div></div>'}).join("")||'<div class="sub">아직 올라온 기록이 없어요</div>';
   }catch(e){$("err").textContent=e.message}
 }

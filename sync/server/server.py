@@ -2,7 +2,7 @@
 """게임 관리 동기화 서버. 파이썬 표준 라이브러리만 쓴다.
 
 폰 앱과 PC 프로그램이 게임별 플레이 시간을 올리고, 확인 화면과 앱이 합계를 받아 간다.
-환경변수: GM_KEY (필수, 요청 헤더 x-gm-key), GM_PORT (기본 8700), GM_DB (기본 ./gm.db)
+환경변수: GM_KEY (필수, 요청 헤더 x-gm-key), GM_PORT (기본 8700), GM_BIND (기본 0.0.0.0, Tailscale 주소 권장), GM_DB (기본 ./gm.db)
 """
 import hmac
 import json
@@ -10,11 +10,14 @@ import os
 import re
 import sqlite3
 import threading
+import time
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 KEY = os.environ.get("GM_KEY", "")
 PORT = int(os.environ.get("GM_PORT", "8700"))
+BIND = os.environ.get("GM_BIND", "0.0.0.0")
 DB = os.environ.get("GM_DB", os.path.join(os.path.dirname(os.path.abspath(__file__)), "gm.db"))
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOCK = threading.Lock()
@@ -40,6 +43,7 @@ def init():
         c.execute("""CREATE TABLE IF NOT EXISTS mark (
             day TEXT NOT NULL, game TEXT NOT NULL, done INTEGER NOT NULL, updated INTEGER NOT NULL,
             PRIMARY KEY (day, game))""")
+        c.execute("""CREATE TABLE IF NOT EXISTS cfg (game TEXT PRIMARY KEY, reset INTEGER NOT NULL)""")
 
 
 def norm(name):
@@ -98,6 +102,35 @@ class H(BaseHTTPRequestHandler):
                     for r in c.execute("SELECT game, SUM(ms) AS ms FROM play WHERE day=? GROUP BY game", (d,)):
                         out.setdefault(d, {})[r["game"]] = r["ms"]
             return self.send(200, out)
+        if u.path == "/api/overview":
+            # the browser sends its local time; each game's "today" uses that game's own reset hour
+            try:
+                local = datetime.strptime((q.get("local") or [""])[0], "%Y-%m-%dT%H:%M")
+            except ValueError:
+                return self.send(400, {"error": "local"})
+            lo = (local - timedelta(days=9)).strftime("%Y-%m-%d")
+            with LOCK, db() as c:
+                rows = c.execute("SELECT day, game, device, ms, last_end, title FROM play WHERE day>=?", (lo,)).fetchall()
+                marks = c.execute("SELECT day, game, done FROM mark WHERE day>=?", (lo,)).fetchall()
+                resets = {r["game"]: r["reset"] for r in c.execute("SELECT game, reset FROM cfg")}
+            by = {}
+            for r in rows:
+                by.setdefault(r["game"], {}).setdefault(r["day"], []).append(r)
+            mk = {(m["game"], m["day"]): bool(m["done"]) for m in marks}
+            games = {}
+            for g, days in by.items():
+                base = local - timedelta(hours=resets.get(g, 4))
+                keys = [(base - timedelta(days=k)).strftime("%Y-%m-%d") for k in range(7)]
+                today = days.get(keys[0], [])
+                title = next((r["title"] for r in today if r["title"]), "") or next((r["title"] for d in days.values() for r in d if r["title"]), "")
+                games[g] = {
+                    "title": title,
+                    "day": keys[0],
+                    "devices": {r["device"]: r["ms"] for r in today},
+                    "done": mk.get((g, keys[0])),
+                    "week": [sum(r["ms"] for r in days.get(k, [])) for k in keys],
+                }
+            return self.send(200, {"games": games})
         return self.send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -105,12 +138,12 @@ class H(BaseHTTPRequestHandler):
             return self.send(401, {"error": "key"})
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            if n > 200000:
+            if n < 0 or n > 200000:
                 return self.send(413, {"error": "big"})
             data = json.loads(self.rfile.read(n) or b"{}")
         except Exception:
             return self.send(400, {"error": "json"})
-        now = int(__import__("time").time() * 1000)
+        now = int(time.time() * 1000)
         if self.path == "/api/play":
             dev = str(data.get("device", ""))[:20]
             if not dev:
@@ -132,6 +165,12 @@ class H(BaseHTTPRequestHandler):
                         ms=MAX(ms, excluded.ms), last_end=MAX(last_end, excluded.last_end), updated=excluded.updated,
                         title=excluded.title""",
                               (day, game, dev, ms, last, now, str(e.get("game", ""))[:60]))
+                    try:
+                        rh = int(e["reset"]) if e.get("reset") is not None else None
+                    except (TypeError, ValueError):
+                        rh = None
+                    if rh is not None and 0 <= rh <= 23:
+                        c.execute("INSERT INTO cfg (game, reset) VALUES (?,?) ON CONFLICT(game) DO UPDATE SET reset=excluded.reset", (game, rh))
                     n_ok += 1
             return self.send(200, {"saved": n_ok})
         if self.path == "/api/mark":
@@ -150,8 +189,8 @@ def main():
     if not KEY or len(KEY) < 16:
         raise SystemExit("GM_KEY must be set (16+ characters)")
     init()
-    print("gm-sync listening on 0.0.0.0:%d" % PORT, flush=True)
-    ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
+    print("gm-sync listening on %s:%d" % (BIND, PORT), flush=True)
+    ThreadingHTTPServer((BIND, PORT), H).serve_forever()
 
 
 if __name__ == "__main__":

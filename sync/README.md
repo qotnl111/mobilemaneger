@@ -29,9 +29,9 @@ curl -s localhost:8700/health   # {"ok": true}
 
 포트 열기 (밖에서 접속할 때만 필요, Tailscale 주소로 쓰면 생략):
 - 오라클 콘솔 > 네트워크 > 보안 목록에 TCP 8700 수신 규칙 추가
-- 서버 안: `sudo iptables -I INPUT -p tcp --dport 8700 -j ACCEPT` (오라클 우분투는 기본 iptables가 막고 있다)
+- 서버 안: `sudo iptables -I INPUT -p tcp --dport 8700 -j ACCEPT` (오라클 우분투는 기본 iptables가 막고 있다. 재부팅하면 사라지므로 `sudo netfilter-persistent save`로 저장한다)
 
-**권장: Tailscale 주소로 쓰기.** 폰과 PC가 이미 Tailscale에 있으면 서버의 Tailscale 주소(100.x.x.x:8700)를 쓴다.
+**권장: Tailscale 주소로 쓰기.** `.env`에 `GM_BIND=100.x.x.x`(서버의 Tailscale 주소)를 넣으면 그 주소에서만 받는다. 폰과 PC가 이미 Tailscale에 있으면 서버의 Tailscale 주소(100.x.x.x:8700)를 쓴다.
 이 구간은 암호화되고 포트도 인터넷에 열지 않아도 된다. 공인 IP로 http를 쓰면 키가 평문으로 오간다.
 
 확인 화면: 브라우저에서 `http://서버주소:8700` 을 열고 키를 한 번 입력한다.
@@ -40,6 +40,7 @@ curl -s localhost:8700/health   # {"ok": true}
 
 1. `pc` 폴더를 컴퓨터에 복사한다.
 2. `config.example.json`을 `config.json`으로 바꾸고 서버 주소, 키, 게임을 채운다.
+   같은 프로세스 이름을 여러 게임이 쓰면(언리얼 `Client-Win64-Shipping` 등) `processPath`에 실행 경로 일부(예: `Wuthering Waves`)를 넣어 구분한다.
    `process`는 작업 관리자 > 세부 정보에서 게임 실행 중에 보이는 이름(.exe 뺀 것)이다.
    `name`은 폰 앱에 보이는 게임 이름과 같게 쓴다(공백 무시). 이름이 같아야 두 기록이 합쳐진다.
 3. 실행: `powershell -ExecutionPolicy Bypass -File gm-pc.ps1`
