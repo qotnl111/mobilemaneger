@@ -27,6 +27,7 @@ public class Cfg
     public int intervalSec = 30;
     public int resetHour = 4;
     public int doneMin = 5;
+    public int idleMin = 0;   // 0 = 끔. 5 = 키보드·마우스를 5분 이상 안 만지면 시간을 세지 않음
     public List<Game> games = new List<Game>();
 }
 
@@ -63,7 +64,7 @@ static class Theme
 class Card
 {
     public string name, title, devs = "", exe = "";
-    public long tot; public bool done, run, link; public long[] week = new long[7];
+    public long tot; public bool done, run, link, idle; public long[] week = new long[7];
 }
 
 class CardPanel : Panel
@@ -141,8 +142,9 @@ class CardPanel : Panel
                 }
                 if (c.run)
                 {
-                    g.FillEllipse(new SolidBrush(Theme.DONE), rc.Right - 24, rc.Y + 16, 9, 9);
-                    g.DrawString("플레이 중", fSub, new SolidBrush(Theme.DONE), new RectangleF(rc.Right - 92, rc.Y + 28, 78, 16), new StringFormat { Alignment = StringAlignment.Far });
+                    var rcol = c.idle ? Theme.TODO : Theme.DONE;
+                    g.FillEllipse(new SolidBrush(rcol), rc.Right - 24, rc.Y + 16, 9, 9);
+                    g.DrawString(c.idle ? "자리 비움" : "플레이 중", fSub, new SolidBrush(rcol), new RectangleF(rc.Right - 92, rc.Y + 28, 78, 16), new StringFormat { Alignment = StringAlignment.Far });
                 }
                 // 이름
                 g.DrawString(c.title, fName, new SolidBrush(Theme.TEXT), new RectangleF(x, y + 56, w, 22), sf);
@@ -201,6 +203,16 @@ class MainForm : Form
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int val, int size);
+    [StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+    [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO p);
+    bool isIdle;
+    // 마지막 키보드/마우스 입력 이후 지난 시간(ms). 게임패드 입력은 잡히지 않는다.
+    static long IdleMs()
+    {
+        var li = new LASTINPUTINFO(); li.cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
+        if (!GetLastInputInfo(ref li)) return 0;
+        return unchecked((uint)Environment.TickCount - li.dwTime);
+    }
 
     readonly string dir = Application.StartupPath;
     string CfgPath { get { return Path.Combine(dir, "config.json"); } }
@@ -219,7 +231,7 @@ class MainForm : Form
     Label title, meta;
     Label doneVal; Button doneMinus, donePlus;
     static readonly int[] DoneSteps = { 1, 3, 5, 10, 15, 30 };
-    CheckBox autoRun, onlyLinked;
+    CheckBox autoRun, onlyLinked, idleCk;
     System.Windows.Forms.Timer tickTimer, refreshTimer;
     Dictionary<string, object> lastOverview; string lastError;
 
@@ -262,7 +274,10 @@ class MainForm : Form
         autoRun.CheckedChanged += (s, e) => SetAutoRun(autoRun.Checked);
         onlyLinked = new CheckBox { Text = "PC 연동만", AutoSize = true, Margin = new Padding(14, 8, 0, 0), ForeColor = Theme.SUB };
         onlyLinked.CheckedChanged += (s, e) => Fill(lastOverview, lastError);
-        bottom.Controls.AddRange(new Control[] { bAdd, bDel, bRen, bSet, onlyLinked, autoRun });
+        idleCk = new CheckBox { Text = "자리 비움 제외(5분)", AutoSize = true, Margin = new Padding(14, 8, 0, 0), ForeColor = Theme.SUB };
+        new ToolTip().SetToolTip(idleCk, "키보드·마우스를 5분 이상 안 만지면 시간을 세지 않아요.\n패드로만 하는 게임은 입력이 잡히지 않으니 끄세요.");
+        idleCk.CheckedChanged += (s, e) => { cfg.idleMin = idleCk.Checked ? 5 : 0; SaveConfig(); };
+        bottom.Controls.AddRange(new Control[] { bAdd, bDel, bRen, bSet, onlyLinked, idleCk, autoRun });
         Controls.Add(bottom);
 
         panel = new CardPanel { Dock = DockStyle.Fill, IconOf = IconOf };
@@ -280,6 +295,7 @@ class MainForm : Form
         if (Array.IndexOf(DoneSteps, cfg.doneMin) < 0) cfg.doneMin = 5;
         doneVal.Text = cfg.doneMin + "분"; panel.Need = cfg.doneMin * 60000L;
         autoRun.Checked = IsAutoRun();
+        idleCk.Checked = cfg.idleMin > 0;
         LoadState();
 
         var h = Handle; // BeginInvoke 를 숨긴 상태에서도 쓰려면 창 핸들이 필요하다
@@ -384,6 +400,7 @@ class MainForm : Form
             }
         }
         if (cfgChanged) SaveConfig();
+        isIdle = cfg.idleMin > 0 && IdleMs() >= cfg.idleMin * 60000L;
         long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var entries = new List<Dictionary<string, object>>();
         bool stopped = false;
@@ -393,6 +410,7 @@ class MainForm : Form
             string k = DayKey(hr) + "|" + g.name;
             if (running.Contains(g.name))
             {
+                if (isIdle) continue; // 자리 비움: 게임은 켜져 있어도 시간을 세지 않는다
                 long cur; state.TryGetValue(k, out cur);
                 state[k] = cur + tick * 1000L;
                 entries.Add(Entry(DayKey(hr), g.name, state[k], nowMs, hr));
@@ -466,7 +484,7 @@ class MainForm : Form
         {
             var c = new Card { name = name, title = name };
             var cg = cfg.games.FirstOrDefault(x => Norm(x.name) == Norm(name));
-            if (cg != null) { c.exe = cg.exe ?? ""; c.run = running.Contains(cg.name); c.title = cg.name; c.link = true; }
+            if (cg != null) { c.exe = cg.exe ?? ""; c.run = running.Contains(cg.name); c.idle = c.run && isIdle; c.title = cg.name; c.link = true; }
             bool markDone = false; var devs = new List<string>();
             if (g != null)
             {
