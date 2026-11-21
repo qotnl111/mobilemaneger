@@ -521,7 +521,7 @@ class MainForm : Form
         const string SEP = "   —   ";
         using (var f = new Form { Text = "게임 추가", Width = 470, Height = 430, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, Font = Font })
         {
-            var info = new Label { Left = 12, Top = 10, Width = 430, Height = 36, Text = "게임을 켠 상태에서 아래 목록에서 고르세요. 폰에도 있는 게임이면 '표시 이름'을 폰 앱의 이름과 똑같이 맞춰야 한 카드로 합쳐져요(오른쪽 화살표로 폰 게임 목록 선택)." };
+            var info = new Label { Left = 12, Top = 10, Width = 430, Height = 36, Text = "① 게임을 켠 상태에서 아래 목록에서 프로그램을 고르세요.\n② '폰 게임'에서 같은 게임을 고르세요. (PC 연동이 안 된 폰 게임만 나와요)" };
             var list = new ListBox { Left = 12, Top = 48, Width = 430, Height = 220, BorderStyle = BorderStyle.FixedSingle };
             var items = new List<KeyValuePair<string, string>>();
             foreach (var p in Process.GetProcesses())
@@ -529,9 +529,10 @@ class MainForm : Form
                 try { if (p.MainWindowTitle.Length > 0 && p.ProcessName != "GameManagerPC") items.Add(new KeyValuePair<string, string>(p.ProcessName, p.MainWindowTitle)); } catch { }
             }
             foreach (var it in items.GroupBy(i => i.Key + "\0" + i.Value).Select(g => g.First()).OrderBy(i => i.Key).ThenBy(i => i.Value)) list.Items.Add(it.Key + SEP + it.Value);
-            var lName = new Label { Left = 12, Top = 282, Width = 90, Text = "표시 이름" };
+            var lName = new Label { Left = 12, Top = 282, Width = 90, Text = "폰 게임" };
             var tName = new ComboBox { Left = 104, Top = 278, Width = 338, DropDownStyle = ComboBoxStyle.DropDown, FlatStyle = FlatStyle.Flat };
-            foreach (var t in PhoneOnlyTitles(true)) tName.Items.Add(t);
+            foreach (var t in PhoneOnlyTitles(false)) tName.Items.Add(t); // 아직 PC 연동 안 된 폰 게임만
+            tName.DropDownHeight = 280; tName.MaxDropDownItems = 15;
             string autoName = "";
             var warn = new Label { Left = 104, Top = 304, Width = 340, Height = 18, Font = new Font("맑은 고딕", 8.5f), Text = "" };
             var lHour = new Label { Left = 12, Top = 336, Width = 90, Text = "하루 시작" };
@@ -617,12 +618,12 @@ class MainForm : Form
         foreach (var kv in games)
         {
             var g = kv.Value as Dictionary<string, object>; if (g == null) continue;
-            var d = g.ContainsKey("devices") ? g["devices"] as Dictionary<string, object> : null;
-            if (d == null || !d.ContainsKey("phone")) continue;
+            // 서버에 기록이 있는 게임 전체(오늘 폰에서 안 했어도 포함). all=false 면 PC 에 아직 연동 안 한 게임만
             if (!all && cfg.games.Any(x => Norm(x.name) == kv.Key)) continue;
             string t = g.ContainsKey("title") ? g["title"] as string : null;
             res.Add(string.IsNullOrEmpty(t) ? kv.Key : t);
         }
+        res.Sort(StringComparer.CurrentCulture);
         return res;
     }
     void RenameToPhone()
