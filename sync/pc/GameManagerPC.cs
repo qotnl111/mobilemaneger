@@ -1,13 +1,17 @@
-﻿// 게임 관리 PC 프로그램: 게임 실행 시간 기록 + 오늘 게임 현황 창 (폰 앱과 같은 서버를 씁니다).
+﻿// 게임 관리 PC 프로그램: 게임 실행 시간 기록 + 오늘 게임 현황 카드 화면 (폰 앱과 같은 서버/같은 모양).
 // 빌드: build.bat (윈도우에 기본으로 들어 있는 csc.exe 만 쓰므로 따로 설치할 것이 없습니다)
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -15,7 +19,7 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-public class Game { public string name = ""; public string process = ""; public string processPath = ""; public int dayStart = -1; }
+public class Game { public string name = ""; public string process = ""; public string processPath = ""; public int dayStart = -1; public string exe = ""; }
 public class Cfg
 {
     public string server = "";
@@ -24,6 +28,148 @@ public class Cfg
     public int resetHour = 4;
     public int doneMin = 5;
     public List<Game> games = new List<Game>();
+}
+
+static class Theme
+{
+    public static readonly Color BG = Color.FromArgb(0x12, 0x14, 0x1A), CARD = Color.FromArgb(0x1D, 0x20, 0x29), LINE = Color.FromArgb(0x2C, 0x30, 0x3C),
+        TEXT = Color.FromArgb(0xF2, 0xF3, 0xF7), SUB = Color.FromArgb(0x9A, 0xA0, 0xAE), TODO = Color.FromArgb(0xFF, 0xB5, 0x47),
+        DONE = Color.FromArgb(0x4A, 0xDE, 0x80), SEL = Color.FromArgb(0x28, 0x2C, 0x39), DARKTXT = Color.FromArgb(0x1A, 0x13, 0x00);
+    public static void Btn(Button b, bool primary)
+    {
+        b.FlatStyle = FlatStyle.Flat; b.FlatAppearance.BorderSize = primary ? 0 : 1; b.FlatAppearance.BorderColor = LINE;
+        b.BackColor = primary ? TODO : CARD; b.ForeColor = primary ? DARKTXT : TEXT; b.AutoSize = true; b.Padding = new Padding(8, 2, 8, 2);
+        b.Cursor = Cursors.Hand; b.UseVisualStyleBackColor = false;
+    }
+    public static void Dark(Control c)
+    {
+        c.BackColor = BG; c.ForeColor = TEXT;
+        foreach (Control k in c.Controls)
+        {
+            if (k is TextBox || k is ListBox || k is ComboBox) { k.BackColor = CARD; k.ForeColor = TEXT; }
+            else if (k is Button) Btn((Button)k, false);
+            else { k.BackColor = BG; k.ForeColor = TEXT; }
+        }
+    }
+    public static GraphicsPath Round(RectangleF r, float rad)
+    {
+        var p = new GraphicsPath(); float d = rad * 2;
+        p.AddArc(r.X, r.Y, d, d, 180, 90); p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90); p.AddArc(r.X, r.Bottom - d, d, d, 90, 90); p.CloseFigure();
+        return p;
+    }
+}
+
+class Card
+{
+    public string name, title, devs = "", exe = "";
+    public long tot; public bool done, run; public long[] week = new long[7];
+}
+
+class CardPanel : Panel
+{
+    public List<Card> Cards = new List<Card>();
+    public long Need = 300000;
+    public string SelectedName;
+    public Func<string, Image> IconOf;
+    const int CW = 176, CH = 258, GAP = 12, PAD = 16;
+
+    public CardPanel() { DoubleBuffered = true; ResizeRedraw = true; AutoScroll = true; BackColor = Theme.BG; }
+    int Cols() { return Math.Max(1, (ClientSize.Width - PAD * 2 + GAP) / (CW + GAP)); }
+    Rectangle RectOf(int i)
+    {
+        int c = Cols();
+        return new Rectangle(PAD + (i % c) * (CW + GAP) + AutoScrollPosition.X, PAD + (i / c) * (CH + GAP) + AutoScrollPosition.Y, CW, CH);
+    }
+    public void Relayout()
+    {
+        int rows = (Cards.Count + Cols() - 1) / Cols();
+        AutoScrollMinSize = new Size(0, PAD * 2 + Math.Max(1, rows) * (CH + GAP));
+        Invalidate();
+    }
+    protected override void OnResize(EventArgs e) { base.OnResize(e); Relayout(); }
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e); Focus();
+        string hit = null;
+        for (int i = 0; i < Cards.Count; i++) if (RectOf(i).Contains(e.Location)) { hit = Cards[i].name; break; }
+        SelectedName = hit == SelectedName ? null : hit; Invalidate();
+    }
+    public static string Fmt(long ms)
+    {
+        long h = ms / 3600000, m = (ms / 60000) % 60;
+        return h > 0 ? h + "시간 " + m + "분" : m + "분";
+    }
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+        g.Clear(Theme.BG);
+        using (var fName = new Font("맑은 고딕", 11f, FontStyle.Bold)) using (var fPill = new Font("맑은 고딕", 8.5f, FontStyle.Bold))
+        using (var fSub = new Font("맑은 고딕", 8.5f)) using (var fBig = new Font("맑은 고딕", 17f, FontStyle.Bold))
+        using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+        {
+            if (Cards.Count == 0)
+            {
+                var r = new RectangleF(PAD, PAD, 360, 90);
+                using (var p = Theme.Round(r, 14)) { g.FillPath(new SolidBrush(Theme.CARD), p); g.DrawPath(new Pen(Theme.LINE), p); }
+                g.DrawString("아래 '+ 게임 추가'로\n관리할 게임을 골라 주세요", fName, new SolidBrush(Theme.SUB), new RectangleF(r.X + 20, r.Y + 22, r.Width - 40, 60));
+                return;
+            }
+            for (int i = 0; i < Cards.Count; i++)
+            {
+                var c = Cards[i]; var rc = RectOf(i);
+                if (rc.Bottom < 0 || rc.Top > Height) continue;
+                bool sel = c.name == SelectedName;
+                using (var path = Theme.Round(rc, 14))
+                {
+                    g.FillPath(new SolidBrush(sel ? Theme.SEL : Theme.CARD), path);
+                    using (var pen = new Pen(sel ? Theme.TEXT : (c.done ? Theme.LINE : Theme.TODO), sel ? 2f : 1.5f)) g.DrawPath(pen, path);
+                }
+                int x = rc.X + 14, y = rc.Y + 14, w = CW - 28;
+                // 아이콘
+                Image ic = IconOf != null ? IconOf(c.exe) : null;
+                if (ic != null)
+                {
+                    var ia = new ImageAttributes(); ia.SetColorMatrix(new ColorMatrix { Matrix33 = c.done ? 0.55f : 1f });
+                    g.DrawImage(ic, new Rectangle(x, y, 48, 48), 0, 0, ic.Width, ic.Height, GraphicsUnit.Pixel, ia);
+                }
+                else
+                {
+                    using (var p = Theme.Round(new RectangleF(x, y, 48, 48), 12)) g.FillPath(new SolidBrush(Theme.LINE), p);
+                    string ch = (c.title ?? "?").Length > 0 ? c.title.Substring(0, 1) : "?";
+                    g.DrawString(ch, fBig, new SolidBrush(Theme.SUB), new RectangleF(x, y + 5, 48, 40), new StringFormat { Alignment = StringAlignment.Center });
+                }
+                if (c.run)
+                {
+                    g.FillEllipse(new SolidBrush(Theme.DONE), rc.Right - 24, rc.Y + 16, 9, 9);
+                    g.DrawString("플레이 중", fSub, new SolidBrush(Theme.DONE), new RectangleF(rc.Right - 92, rc.Y + 28, 78, 16), new StringFormat { Alignment = StringAlignment.Far });
+                }
+                // 이름
+                g.DrawString(c.title, fName, new SolidBrush(Theme.TEXT), new RectangleF(x, y + 56, w, 22), sf);
+                // 상태 알약
+                string pill = c.done ? "✓ 플레이 완료" : "아직 안 함";
+                var ps = g.MeasureString(pill, fPill); var pr = new RectangleF(x, y + 84, ps.Width + 12, 20);
+                using (var p = Theme.Round(pr, 10)) g.FillPath(new SolidBrush(c.done ? Color.FromArgb(0x22, 0x4A, 0xDE, 0x80) : Theme.TODO), p);
+                g.DrawString(pill, fPill, new SolidBrush(c.done ? Theme.DONE : Theme.DARKTXT), pr.X + 6, pr.Y + 2);
+                // 오늘 시간
+                g.DrawString("오늘", fSub, new SolidBrush(Theme.SUB), x, y + 112);
+                g.DrawString(Fmt(c.tot), fBig, new SolidBrush(Theme.TEXT), x - 1, y + 126);
+                // 진행 막대
+                var tr = new RectangleF(x, y + 164, w, 6);
+                using (var p = Theme.Round(tr, 3)) g.FillPath(new SolidBrush(Theme.LINE), p);
+                float frac = Need <= 0 ? 1f : (float)Math.Min(1.0, (double)c.tot / Need);
+                if (frac > 0.01f) using (var p = Theme.Round(new RectangleF(x, y + 164, Math.Max(6f, w * frac), 6), 3)) g.FillPath(new SolidBrush(c.done ? Theme.DONE : Theme.TODO), p);
+                // 최근 7일
+                float bw = (w - 6 * 3) / 7f;
+                for (int d = 0; d < 7; d++)
+                {
+                    long ms = c.week[6 - d]; // 왼쪽이 오래된 날, 오른쪽이 오늘
+                    g.FillRectangle(new SolidBrush(ms >= Need ? Theme.DONE : Theme.LINE), x + d * (bw + 3), y + 180, bw, 7);
+                }
+                g.DrawString(c.devs, fSub, new SolidBrush(Theme.SUB), new RectangleF(x, y + 194, w, 18), sf);
+            }
+        }
+    }
 }
 
 static class Program
@@ -37,8 +183,7 @@ static class Program
             if (!created) return;
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            bool tray = args.Contains("--tray");
-            Application.Run(new MainForm(tray));
+            Application.Run(new MainForm(args.Contains("--tray")));
         }
     }
 }
@@ -48,6 +193,7 @@ class MainForm : Form
     static readonly JavaScriptSerializer Ser = new JavaScriptSerializer();
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int val, int size);
 
     readonly string dir = Application.StartupPath;
     string CfgPath { get { return Path.Combine(dir, "config.json"); } }
@@ -57,49 +203,62 @@ class MainForm : Form
     Dictionary<string, long> state = new Dictionary<string, long>();
     HashSet<string> prevRunning = new HashSet<string>();
     HashSet<string> running = new HashSet<string>();
+    Dictionary<string, Image> icons = new Dictionary<string, Image>();
     int sinceUpload = 999;
     bool allowShow, exiting;
 
     NotifyIcon tray;
-    ListView lv;
-    Label meta;
-    ComboBox doneBox;
+    CardPanel panel;
+    Label title, meta;
+    Label doneVal; Button doneMinus, donePlus;
+    static readonly int[] DoneSteps = { 1, 3, 5, 10, 15, 30 };
     CheckBox autoRun;
     System.Windows.Forms.Timer tickTimer, refreshTimer;
+    Dictionary<string, object> lastOverview; string lastError;
 
     public MainForm(bool startHidden)
     {
         allowShow = !startHidden;
         Text = "게임 관리";
         Icon = SystemIcons.Application;
-        Width = 760; Height = 520; MinimumSize = new Size(560, 320);
+        Width = 820; Height = 640; MinimumSize = new Size(420, 380);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("맑은 고딕", 9.5f);
+        BackColor = Theme.BG; ForeColor = Theme.TEXT;
 
-        var top = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(8, 8, 8, 0), WrapContents = false };
-        meta = new Label { AutoSize = true, Margin = new Padding(0, 6, 16, 0), Text = "불러오는 중…" };
-        doneBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 56 };
-        foreach (var m in new[] { "1", "3", "5", "10", "15", "30" }) doneBox.Items.Add(m);
-        top.Controls.Add(meta);
-        top.Controls.Add(new Label { AutoSize = true, Margin = new Padding(0, 6, 4, 0), Text = "완료 기준(분)" });
-        top.Controls.Add(doneBox);
-        var bRe = new Button { Text = "새로고침", AutoSize = true }; bRe.Click += (s, e) => Reload();
-        top.Controls.Add(bRe);
+        var top = new Panel { Dock = DockStyle.Top, Height = 76, BackColor = Theme.BG };
+        title = new Label { Text = "게임 관리", Font = new Font("맑은 고딕", 16f, FontStyle.Bold), AutoSize = true, Left = 16, Top = 10, ForeColor = Theme.TEXT };
+        meta = new Label { Text = "불러오는 중…", AutoSize = true, Left = 18, Top = 46, ForeColor = Theme.SUB };
+        doneMinus = new Button { Text = "−" }; Theme.Btn(doneMinus, false); doneMinus.AutoSize = false; doneMinus.Size = new Size(30, 30); doneMinus.Padding = Padding.Empty; doneMinus.Padding = Padding.Empty;
+        donePlus = new Button { Text = "+" }; Theme.Btn(donePlus, false); donePlus.AutoSize = false; donePlus.Size = new Size(30, 30); donePlus.Padding = Padding.Empty;
+        doneVal = new Label { AutoSize = false, Width = 44, Height = 30, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Theme.TEXT, Font = new Font("맑은 고딕", 10.5f, FontStyle.Bold) };
+        doneMinus.Click += (s, e) => StepDone(-1); donePlus.Click += (s, e) => StepDone(1);
+        var lbl = new Label { Text = "완료 기준(분)", AutoSize = true, ForeColor = Theme.SUB };
+        var bRe = new Button { Text = "새로고침" }; Theme.Btn(bRe, false); bRe.Click += (s, e) => Reload();
+        top.Controls.AddRange(new Control[] { title, meta, lbl, doneMinus, doneVal, donePlus, bRe });
+        top.Resize += (s, e) =>
+        {
+            bRe.Left = top.Width - bRe.Width - 16; bRe.Top = 14;
+            donePlus.Left = bRe.Left - donePlus.Width - 12; donePlus.Top = 14;
+            doneVal.Left = donePlus.Left - doneVal.Width; doneVal.Top = 14;
+            doneMinus.Left = doneVal.Left - doneMinus.Width; doneMinus.Top = 14;
+            lbl.Left = doneMinus.Left - lbl.Width - 6; lbl.Top = 20;
+        };
         Controls.Add(top);
 
-        var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 42, Padding = new Padding(8, 6, 8, 0), WrapContents = false };
-        var bAdd = new Button { Text = "게임 추가", AutoSize = true }; bAdd.Click += (s, e) => AddGame();
-        var bDel = new Button { Text = "선택 게임 제거", AutoSize = true }; bDel.Click += (s, e) => RemoveGame();
-        var bSet = new Button { Text = "서버 설정", AutoSize = true }; bSet.Click += (s, e) => { Settings(); Reload(); };
-        autoRun = new CheckBox { Text = "윈도우 시작 시 자동 실행", AutoSize = true, Margin = new Padding(12, 6, 0, 0) };
+        var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 52, Padding = new Padding(12, 10, 12, 0), WrapContents = false, BackColor = Theme.BG };
+        var bAdd = new Button { Text = "+ 게임 추가" }; Theme.Btn(bAdd, true); bAdd.Click += (s, e) => AddGame();
+        var bDel = new Button { Text = "선택 게임 제거" }; Theme.Btn(bDel, false); bDel.Click += (s, e) => RemoveGame();
+        var bRen = new Button { Text = "폰과 이름 맞추기" }; Theme.Btn(bRen, false); bRen.Click += (s, e) => RenameToPhone();
+        var bSet = new Button { Text = "서버 설정" }; Theme.Btn(bSet, false); bSet.Click += (s, e) => { Settings(); Reload(); };
+        autoRun = new CheckBox { Text = "윈도우 시작 시 자동 실행", AutoSize = true, Margin = new Padding(14, 8, 0, 0), ForeColor = Theme.SUB };
         autoRun.CheckedChanged += (s, e) => SetAutoRun(autoRun.Checked);
-        bottom.Controls.AddRange(new Control[] { bAdd, bDel, bSet, autoRun });
+        bottom.Controls.AddRange(new Control[] { bAdd, bDel, bRen, bSet, autoRun });
         Controls.Add(bottom);
 
-        lv = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = false, MultiSelect = false };
-        lv.Columns.Add("게임", 190); lv.Columns.Add("오늘", 70); lv.Columns.Add("상태", 100); lv.Columns.Add("기기별", 190); lv.Columns.Add("최근 7일", 120);
-        Controls.Add(lv);
-        lv.BringToFront();
+        panel = new CardPanel { Dock = DockStyle.Fill, IconOf = IconOf };
+        Controls.Add(panel);
+        panel.BringToFront();
 
         tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "게임 관리", Visible = true };
         var menu = new ContextMenuStrip();
@@ -109,13 +268,13 @@ class MainForm : Form
         tray.DoubleClick += (s, e) => ShowMain();
 
         LoadConfig();
-        doneBox.SelectedItem = cfg.doneMin.ToString();
-        if (doneBox.SelectedIndex < 0) doneBox.SelectedItem = "5";
-        doneBox.SelectedIndexChanged += (s, e) => { cfg.doneMin = int.Parse((string)doneBox.SelectedItem); SaveConfig(); Reload(); };
+        if (Array.IndexOf(DoneSteps, cfg.doneMin) < 0) cfg.doneMin = 5;
+        doneVal.Text = cfg.doneMin + "분"; panel.Need = cfg.doneMin * 60000L;
         autoRun.Checked = IsAutoRun();
         LoadState();
 
         var h = Handle; // BeginInvoke 를 숨긴 상태에서도 쓰려면 창 핸들이 필요하다
+        int dark = 1; DwmSetWindowAttribute(Handle, 20, ref dark, 4); // 제목 표시줄도 어둡게
         tickTimer = new System.Windows.Forms.Timer { Interval = Math.Max(10, cfg.intervalSec) * 1000 };
         tickTimer.Tick += (s, e) => Tick();
         tickTimer.Start();
@@ -132,7 +291,21 @@ class MainForm : Form
         if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); return; }
         base.OnFormClosing(e);
     }
+    void StepDone(int d)
+    {
+        int i = Math.Max(0, Math.Min(DoneSteps.Length - 1, Array.IndexOf(DoneSteps, cfg.doneMin) + d));
+        cfg.doneMin = DoneSteps[i]; doneVal.Text = cfg.doneMin + "분"; panel.Need = cfg.doneMin * 60000L; SaveConfig(); Fill(lastOverview, lastError);
+    }
     void ShowMain() { allowShow = true; Show(); WindowState = FormWindowState.Normal; Activate(); Reload(); }
+
+    Image IconOf(string exe)
+    {
+        if (string.IsNullOrEmpty(exe)) return null;
+        Image im;
+        if (icons.TryGetValue(exe, out im)) return im;
+        try { using (var ic = Icon.ExtractAssociatedIcon(exe)) im = ic.ToBitmap(); } catch { im = null; }
+        icons[exe] = im; return im;
+    }
 
     // ---- 설정/상태 파일
     void LoadConfig()
@@ -152,19 +325,26 @@ class MainForm : Form
 
     // ---- 시간 기록
     static string DayKey(int hour) { return DateTime.Now.AddHours(-hour).ToString("yyyy-MM-dd", Inv); }
-    static bool IsRunning(Game g)
+    static bool IsRunning(Game g, out string exePath)
     {
+        exePath = null;
         Process[] ps;
         try { ps = Process.GetProcessesByName(g.process); } catch { return false; }
         try
         {
             if (ps.Length == 0) return false;
-            if (string.IsNullOrEmpty(g.processPath)) return true;
+            bool any = string.IsNullOrEmpty(g.processPath);
             foreach (var p in ps)
             {
-                try { if (p.MainModule.FileName.IndexOf(g.processPath, StringComparison.OrdinalIgnoreCase) >= 0) return true; } catch { }
+                try
+                {
+                    string f = p.MainModule.FileName;
+                    if (!string.IsNullOrEmpty(g.processPath) && f.IndexOf(g.processPath, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    exePath = f; any = true; break;
+                }
+                catch { }
             }
-            return false;
+            return any;
         }
         finally { foreach (var p in ps) p.Dispose(); }
     }
@@ -176,7 +356,17 @@ class MainForm : Form
     {
         int tick = Math.Max(10, cfg.intervalSec);
         running = new HashSet<string>();
-        foreach (var g in cfg.games) if (IsRunning(g)) running.Add(g.name);
+        bool cfgChanged = false;
+        foreach (var g in cfg.games)
+        {
+            string exe;
+            if (IsRunning(g, out exe))
+            {
+                running.Add(g.name);
+                if (!string.IsNullOrEmpty(exe) && g.exe != exe) { g.exe = exe; cfgChanged = true; }
+            }
+        }
+        if (cfgChanged) SaveConfig();
         long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var entries = new List<Dictionary<string, object>>();
         bool stopped = false;
@@ -236,7 +426,6 @@ class MainForm : Form
         ThreadPool.QueueUserWorkItem(_ => { try { Http("POST", url, body); } catch { } });
     }
 
-    Dictionary<string, object> lastOverview; string lastError;
     void Reload()
     {
         if (cfg.server == "" || cfg.key == "") { meta.Text = "서버 설정이 필요해요"; return; }
@@ -250,97 +439,133 @@ class MainForm : Form
     }
     static string Norm(string n) { var s = Regex.Replace(n ?? "", @"\s+", "").ToLowerInvariant(); return s.Length > 80 ? s.Substring(0, 80) : s; }
     static long L(object o) { return o == null ? 0 : Convert.ToInt64(o, Inv); }
-    static string Mins(long ms) { return (ms / 60000) + "분"; }
 
     void Fill(Dictionary<string, object> o, string err)
     {
-        if (err != null) { meta.Text = "서버에 연결하지 못했어요 (" + err + ")"; }
-        long need = cfg.doneMin * 60000L;
-        var rows = new List<string[]>(); var doneFlags = new List<bool>(); var runFlags = new List<bool>();
-        var seen = new HashSet<string>();
-        var rowsData = new List<Tuple<bool, string, string[], bool>>();
+        long need = cfg.doneMin * 60000L; panel.Need = need;
+        var cards = new List<Card>(); var seen = new HashSet<string>();
         Dictionary<string, object> games = (o != null && o.ContainsKey("games")) ? o["games"] as Dictionary<string, object> : null;
         Action<string, Dictionary<string, object>> add = (name, g) =>
         {
-            long tot = 0; var devs = new List<string>(); string wk = "";
-            bool markDone = false;
+            var c = new Card { name = name, title = name };
+            var cg = cfg.games.FirstOrDefault(x => Norm(x.name) == Norm(name));
+            if (cg != null) { c.exe = cg.exe ?? ""; c.run = running.Contains(cg.name); c.title = cg.name; }
+            bool markDone = false; var devs = new List<string>();
             if (g != null)
             {
+                if (cg == null && g.ContainsKey("title") && !string.IsNullOrEmpty(g["title"] as string)) c.title = (string)g["title"];
                 var d = g.ContainsKey("devices") ? g["devices"] as Dictionary<string, object> : null;
-                if (d != null) foreach (var kv in d) { long ms = L(kv.Value); tot += ms; devs.Add((kv.Key == "phone" ? "폰" : kv.Key == "pc" ? "PC" : kv.Key) + " " + Mins(ms)); }
+                if (d != null) foreach (var kv in d) { long ms = L(kv.Value); c.tot += ms; devs.Add((kv.Key == "phone" ? "폰" : kv.Key == "pc" ? "PC" : kv.Key) + " " + CardPanel.Fmt(ms)); }
                 markDone = g.ContainsKey("done") && g["done"] is bool && (bool)g["done"];
                 var w = g.ContainsKey("week") ? g["week"] as System.Collections.IEnumerable : null;
-                if (w != null) wk = string.Concat(w.Cast<object>().Reverse().Select(x => L(x) >= need ? "■" : "□"));
+                if (w != null) { int i = 0; foreach (var x in w) { if (i < 7) c.week[i] = L(x); i++; } }
             }
-            bool done = tot >= need || markDone;
-            bool run = cfg.games.Any(x => Norm(x.name) == Norm(name) && running.Contains(x.name));
-            string title = g != null && g.ContainsKey("title") && !string.IsNullOrEmpty(g["title"] as string) ? (string)g["title"] : name;
-            rowsData.Add(Tuple.Create(done, title, new[] { title, Mins(tot), run ? (done ? "완료 · 플레이 중" : "플레이 중") : (done ? "완료" : "아직 안 함"), string.Join(" · ", devs), wk }, run));
+            c.devs = string.Join(" · ", devs);
+            c.done = c.tot >= need || markDone;
+            cards.Add(c);
         };
         if (games != null) foreach (var kv in games) { seen.Add(kv.Key); add(kv.Key, kv.Value as Dictionary<string, object>); }
-        foreach (var g in cfg.games) if (!seen.Contains(Norm(g.name))) { seen.Add(Norm(g.name)); add(g.name, null); }
-        rowsData.Sort((a, b) => a.Item1 != b.Item1 ? a.Item1.CompareTo(b.Item1) : string.Compare(a.Item2, b.Item2, StringComparison.CurrentCulture));
-        lv.BeginUpdate(); lv.Items.Clear();
-        foreach (var r in rowsData)
-        {
-            var it = new ListViewItem(r.Item3);
-            if (r.Item1) it.ForeColor = Color.FromArgb(40, 150, 90);
-            if (r.Item4) it.Font = new Font(lv.Font, FontStyle.Bold);
-            lv.Items.Add(it);
-        }
-        lv.EndUpdate();
-        if (err == null) meta.Text = "오늘 " + rowsData.Count(r => r.Item1) + " / " + rowsData.Count + " 완료";
+        foreach (var g in cfg.games) if (seen.Add(Norm(g.name))) add(g.name, null);
+        cards.Sort((a, b) => a.done != b.done ? a.done.CompareTo(b.done) : string.Compare(a.title, b.title, StringComparison.CurrentCulture));
+        panel.Cards = cards; panel.Relayout();
+        if (err != null) meta.Text = "서버에 연결하지 못했어요 (" + err + ")";
+        else meta.Text = "오늘 " + cards.Count(c => c.done) + " / " + cards.Count + " 완료 · " + cfg.doneMin + "분 이상 켜면 자동 완료";
     }
 
     // ---- 게임 추가/제거/설정
     void AddGame()
     {
-        using (var f = new Form { Text = "게임 추가", Width = 460, Height = 420, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, Font = Font })
+        const string SEP = "   —   ";
+        using (var f = new Form { Text = "게임 추가", Width = 470, Height = 430, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, Font = Font })
         {
-            var info = new Label { Left = 12, Top = 10, Width = 420, Height = 36, Text = "게임을 켠 상태에서 아래 목록(창이 있는 프로그램)에서 고르세요." };
-            var list = new ListBox { Left = 12, Top = 48, Width = 420, Height = 220 };
+            var info = new Label { Left = 12, Top = 10, Width = 430, Height = 36, Text = "게임을 켠 상태에서 아래 목록에서 고르세요. 폰에도 있는 게임이면 '표시 이름'을 폰 앱의 이름과 똑같이 맞춰야 한 카드로 합쳐져요(오른쪽 화살표로 폰 게임 목록 선택)." };
+            var list = new ListBox { Left = 12, Top = 48, Width = 430, Height = 220, BorderStyle = BorderStyle.FixedSingle };
             var items = new List<KeyValuePair<string, string>>();
             foreach (var p in Process.GetProcesses())
             {
                 try { if (p.MainWindowTitle.Length > 0 && p.ProcessName != "GameManagerPC") items.Add(new KeyValuePair<string, string>(p.ProcessName, p.MainWindowTitle)); } catch { }
             }
-            foreach (var it in items.GroupBy(i => i.Key).Select(g => g.First()).OrderBy(i => i.Key)) list.Items.Add(it.Key + "   —   " + it.Value);
-            var lName = new Label { Left = 12, Top = 280, Width = 90, Text = "표시 이름" };
-            var tName = new TextBox { Left = 104, Top = 276, Width = 328 };
-            var lHour = new Label { Left = 12, Top = 312, Width = 90, Text = "하루 시작" };
-            var cHour = new ComboBox { Left = 104, Top = 308, Width = 120, DropDownStyle = ComboBoxStyle.DropDownList };
+            foreach (var it in items.GroupBy(i => i.Key).Select(g => g.First()).OrderBy(i => i.Key)) list.Items.Add(it.Key + SEP + it.Value);
+            var lName = new Label { Left = 12, Top = 282, Width = 90, Text = "표시 이름" };
+            var tName = new ComboBox { Left = 104, Top = 278, Width = 338, DropDownStyle = ComboBoxStyle.DropDown, FlatStyle = FlatStyle.Flat };
+            foreach (var t in PhoneOnlyTitles()) tName.Items.Add(t);
+            string autoName = "";
+            var lHour = new Label { Left = 12, Top = 316, Width = 90, Text = "하루 시작" };
+            var cHour = new ComboBox { Left = 104, Top = 312, Width = 120, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat };
             cHour.Items.Add("기본 (" + cfg.resetHour + "시)"); for (int h = 0; h < 24; h++) cHour.Items.Add(h + "시"); cHour.SelectedIndex = 0;
-            var ok = new Button { Text = "추가", Left = 270, Top = 344, Width = 80, DialogResult = DialogResult.OK };
-            var cancel = new Button { Text = "취소", Left = 352, Top = 344, Width = 80, DialogResult = DialogResult.Cancel };
-            list.SelectedIndexChanged += (s, e) => { if (list.SelectedItem != null && tName.Text.Length == 0) tName.Text = ((string)list.SelectedItem).Split(new[] { "   —   " }, StringSplitOptions.None)[0]; };
+            var ok = new Button { Text = "추가", Left = 280, Top = 350, Width = 80, DialogResult = DialogResult.OK };
+            var cancel = new Button { Text = "취소", Left = 362, Top = 350, Width = 80, DialogResult = DialogResult.Cancel };
+            list.SelectedIndexChanged += (s, e) => { if (list.SelectedItem != null && (tName.Text == "" || tName.Text == autoName)) { autoName = ((string)list.SelectedItem).Split(new[] { SEP }, StringSplitOptions.None)[0]; tName.Text = autoName; } };
             f.Controls.AddRange(new Control[] { info, list, lName, tName, lHour, cHour, ok, cancel });
+            Theme.Dark(f); Theme.Btn(ok, true); ok.AutoSize = false; cancel.AutoSize = false; ok.Size = cancel.Size = new Size(80, 30);
             f.AcceptButton = ok; f.CancelButton = cancel;
             if (f.ShowDialog(this) != DialogResult.OK || list.SelectedItem == null) return;
-            string proc = ((string)list.SelectedItem).Split(new[] { "   —   " }, StringSplitOptions.None)[0];
+            string proc = ((string)list.SelectedItem).Split(new[] { SEP }, StringSplitOptions.None)[0];
             string name = tName.Text.Trim().Length > 0 ? tName.Text.Trim() : proc;
             if (cfg.games.Any(g => Norm(g.name) == Norm(name))) { MessageBox.Show("같은 이름의 게임이 이미 있어요."); return; }
-            cfg.games.Add(new Game { name = name, process = proc, dayStart = cHour.SelectedIndex == 0 ? -1 : cHour.SelectedIndex - 1 });
+            string exe = "";
+            try { var ps = Process.GetProcessesByName(proc); if (ps.Length > 0) exe = ps[0].MainModule.FileName; } catch { }
+            cfg.games.Add(new Game { name = name, process = proc, exe = exe, dayStart = cHour.SelectedIndex == 0 ? -1 : cHour.SelectedIndex - 1 });
             SaveConfig(); Tick(); Reload();
+        }
+    }
+    List<string> PhoneOnlyTitles()
+    {
+        var res = new List<string>();
+        var games = (lastOverview != null && lastOverview.ContainsKey("games")) ? lastOverview["games"] as Dictionary<string, object> : null;
+        if (games == null) return res;
+        foreach (var kv in games)
+        {
+            var g = kv.Value as Dictionary<string, object>; if (g == null) continue;
+            var d = g.ContainsKey("devices") ? g["devices"] as Dictionary<string, object> : null;
+            if (d == null || !d.ContainsKey("phone")) continue;
+            if (cfg.games.Any(x => Norm(x.name) == kv.Key)) continue;
+            string t = g.ContainsKey("title") ? g["title"] as string : null;
+            res.Add(string.IsNullOrEmpty(t) ? kv.Key : t);
+        }
+        return res;
+    }
+    void RenameToPhone()
+    {
+        if (panel.SelectedName == null) { MessageBox.Show("이름을 맞출 게임 카드를 먼저 클릭하세요."); return; }
+        var g = cfg.games.FirstOrDefault(x => Norm(x.name) == Norm(panel.SelectedName));
+        if (g == null) { MessageBox.Show("이 카드는 폰에서 온 게임이에요. PC에서 추가한 게임 카드를 고르세요."); return; }
+        var titles = PhoneOnlyTitles();
+        if (titles.Count == 0) { MessageBox.Show("이름을 맞출 폰 게임이 아직 없어요.\n폰 앱에서 동기화(설정 > PC·폰 동기화)를 한 번 한 뒤 새로고침하세요."); return; }
+        using (var f = new Form { Text = "폰 게임과 이름 맞추기", Width = 400, Height = 360, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, Font = Font })
+        {
+            var info = new Label { Left = 12, Top = 10, Width = 360, Height = 36, Text = "'" + g.name + "' 와(과) 같은 게임을 폰 목록에서 고르세요." };
+            var list = new ListBox { Left = 12, Top = 50, Width = 360, Height = 220, BorderStyle = BorderStyle.FixedSingle };
+            foreach (var t in titles) list.Items.Add(t);
+            var ok = new Button { Text = "맞추기", Left = 210, Top = 282, Width = 80, DialogResult = DialogResult.OK };
+            var cancel = new Button { Text = "취소", Left = 292, Top = 282, Width = 80, DialogResult = DialogResult.Cancel };
+            f.Controls.AddRange(new Control[] { info, list, ok, cancel });
+            Theme.Dark(f); Theme.Btn(ok, true); ok.AutoSize = false; cancel.AutoSize = false; ok.Size = cancel.Size = new Size(80, 30);
+            f.AcceptButton = ok; f.CancelButton = cancel;
+            if (f.ShowDialog(this) != DialogResult.OK || list.SelectedItem == null) return;
+            string nn = (string)list.SelectedItem, old = g.name;
+            foreach (var k in state.Keys.Where(k => k.EndsWith("|" + old)).ToList()) { var nk = k.Substring(0, k.Length - old.Length) + nn; state[nk] = state[k]; state.Remove(k); }
+            g.name = nn; panel.SelectedName = null; SaveConfig(); SaveState(); Tick(); Reload();
         }
     }
     void RemoveGame()
     {
-        if (lv.SelectedItems.Count == 0) { MessageBox.Show("지울 게임을 목록에서 먼저 고르세요."); return; }
-        string title = lv.SelectedItems[0].Text;
-        var g = cfg.games.FirstOrDefault(x => Norm(x.name) == Norm(title));
+        if (panel.SelectedName == null) { MessageBox.Show("지울 게임 카드를 먼저 클릭해서 고르세요."); return; }
+        var g = cfg.games.FirstOrDefault(x => Norm(x.name) == Norm(panel.SelectedName));
         if (g == null) { MessageBox.Show("이 게임은 폰에서만 기록된 거라 여기서 지울 수 없어요."); return; }
         if (MessageBox.Show("'" + g.name + "' 기록을 PC에서 그만할까요? (이미 올라간 기록은 남아요)", "게임 제거", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
-        cfg.games.Remove(g); SaveConfig(); Reload();
+        cfg.games.Remove(g); panel.SelectedName = null; SaveConfig(); Reload();
     }
     void Settings()
     {
-        using (var f = new Form { Text = "서버 설정", Width = 440, Height = 190, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, Font = Font })
+        using (var f = new Form { Text = "서버 설정", Width = 450, Height = 190, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, Font = Font })
         {
-            var tS = new TextBox { Left = 90, Top = 16, Width = 320, Text = cfg.server };
-            var tK = new TextBox { Left = 90, Top = 50, Width = 320, Text = cfg.key, UseSystemPasswordChar = true };
-            var ok = new Button { Text = "저장", Left = 250, Top = 96, Width = 80, DialogResult = DialogResult.OK };
-            var cancel = new Button { Text = "취소", Left = 332, Top = 96, Width = 80, DialogResult = DialogResult.Cancel };
+            var tS = new TextBox { Left = 90, Top = 16, Width = 330, Text = cfg.server, BorderStyle = BorderStyle.FixedSingle };
+            var tK = new TextBox { Left = 90, Top = 50, Width = 330, Text = cfg.key, UseSystemPasswordChar = true, BorderStyle = BorderStyle.FixedSingle };
+            var ok = new Button { Text = "저장", Left = 260, Top = 96, Width = 80, DialogResult = DialogResult.OK };
+            var cancel = new Button { Text = "취소", Left = 342, Top = 96, Width = 80, DialogResult = DialogResult.Cancel };
             f.Controls.AddRange(new Control[] { new Label { Left = 12, Top = 20, Width = 76, Text = "서버 주소" }, tS, new Label { Left = 12, Top = 54, Width = 76, Text = "키" }, tK, ok, cancel });
+            Theme.Dark(f); Theme.Btn(ok, true); ok.AutoSize = false; cancel.AutoSize = false; ok.Size = cancel.Size = new Size(80, 30);
             f.AcceptButton = ok; f.CancelButton = cancel;
             if (f.ShowDialog(this) != DialogResult.OK) return;
             cfg.server = tS.Text.Trim().TrimEnd('/'); cfg.key = tK.Text.Trim(); SaveConfig();
@@ -362,4 +587,3 @@ class MainForm : Form
         catch { }
     }
 }
-
