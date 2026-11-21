@@ -2,3 +2,4 @@ config.json
 state.json
 .env
 *.db
+*.exe
