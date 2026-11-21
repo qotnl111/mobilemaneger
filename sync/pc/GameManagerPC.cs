@@ -488,28 +488,49 @@ class MainForm : Form
             foreach (var it in items.GroupBy(i => i.Key).Select(g => g.First()).OrderBy(i => i.Key)) list.Items.Add(it.Key + SEP + it.Value);
             var lName = new Label { Left = 12, Top = 282, Width = 90, Text = "표시 이름" };
             var tName = new ComboBox { Left = 104, Top = 278, Width = 338, DropDownStyle = ComboBoxStyle.DropDown, FlatStyle = FlatStyle.Flat };
-            foreach (var t in PhoneOnlyTitles()) tName.Items.Add(t);
+            foreach (var t in PhoneOnlyTitles(true)) tName.Items.Add(t);
             string autoName = "";
             var lHour = new Label { Left = 12, Top = 316, Width = 90, Text = "하루 시작" };
             var cHour = new ComboBox { Left = 104, Top = 312, Width = 120, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat };
             cHour.Items.Add("기본 (" + cfg.resetHour + "시)"); for (int h = 0; h < 24; h++) cHour.Items.Add(h + "시"); cHour.SelectedIndex = 0;
             var ok = new Button { Text = "추가", Left = 280, Top = 350, Width = 80, DialogResult = DialogResult.OK };
             var cancel = new Button { Text = "취소", Left = 362, Top = 350, Width = 80, DialogResult = DialogResult.Cancel };
-            list.SelectedIndexChanged += (s, e) => { if (list.SelectedItem != null && (tName.Text == "" || tName.Text == autoName)) { autoName = ((string)list.SelectedItem).Split(new[] { SEP }, StringSplitOptions.None)[0]; tName.Text = autoName; } };
+            list.SelectedIndexChanged += (s, e) =>
+            {
+                if (list.SelectedItem == null || !(tName.Text == "" || tName.Text == autoName)) return;
+                var parts = ((string)list.SelectedItem).Split(new[] { SEP }, StringSplitOptions.None);
+                string np = Norm(parts[0]), nw = parts.Length > 1 ? Norm(parts[1]) : "";
+                // 폰 게임 이름과 프로세스/창 제목이 비슷하면 자동으로 그 이름을 제안한다
+                string guess = null;
+                foreach (var t in PhoneOnlyTitles(true))
+                {
+                    string nt = Norm(t);
+                    if (nt.Length >= 3 && (nt == np || nt == nw || (np.Length >= 3 && (nt.Contains(np) || np.Contains(nt))) || (nw.Length >= 3 && (nw.Contains(nt) || nt.Contains(nw))))) { guess = t; break; }
+                }
+                autoName = guess ?? parts[0]; tName.Text = autoName;
+            };
             f.Controls.AddRange(new Control[] { info, list, lName, tName, lHour, cHour, ok, cancel });
             Theme.Dark(f); Theme.Btn(ok, true); ok.AutoSize = false; cancel.AutoSize = false; ok.Size = cancel.Size = new Size(80, 30);
             f.AcceptButton = ok; f.CancelButton = cancel;
             if (f.ShowDialog(this) != DialogResult.OK || list.SelectedItem == null) return;
             string proc = ((string)list.SelectedItem).Split(new[] { SEP }, StringSplitOptions.None)[0];
             string name = tName.Text.Trim().Length > 0 ? tName.Text.Trim() : proc;
-            if (cfg.games.Any(g => Norm(g.name) == Norm(name))) { MessageBox.Show("같은 이름의 게임이 이미 있어요."); return; }
             string exe = "";
             try { var ps = Process.GetProcessesByName(proc); if (ps.Length > 0) exe = ps[0].MainModule.FileName; } catch { }
+            var same = cfg.games.FirstOrDefault(g => Norm(g.name) == Norm(name));
+            if (same != null)
+            {
+                // 이미 등록된 게임이면 막지 않고, 어떤 프로그램을 이 게임으로 볼지만 바꿔 준다
+                if (MessageBox.Show("'" + same.name + "'은(는) 이미 등록돼 있어요.\n이 게임의 실행 프로그램을 '" + proc + "'(으)로 바꿀까요?", "게임 추가", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+                same.process = proc; same.processPath = ""; if (exe != "") same.exe = exe;
+                if (cHour.SelectedIndex != 0) same.dayStart = cHour.SelectedIndex - 1;
+                SaveConfig(); Tick(); Reload(); return;
+            }
             cfg.games.Add(new Game { name = name, process = proc, exe = exe, dayStart = cHour.SelectedIndex == 0 ? -1 : cHour.SelectedIndex - 1 });
             SaveConfig(); Tick(); Reload();
         }
     }
-    List<string> PhoneOnlyTitles()
+    List<string> PhoneOnlyTitles(bool all = false)
     {
         var res = new List<string>();
         var games = (lastOverview != null && lastOverview.ContainsKey("games")) ? lastOverview["games"] as Dictionary<string, object> : null;
@@ -519,7 +540,7 @@ class MainForm : Form
             var g = kv.Value as Dictionary<string, object>; if (g == null) continue;
             var d = g.ContainsKey("devices") ? g["devices"] as Dictionary<string, object> : null;
             if (d == null || !d.ContainsKey("phone")) continue;
-            if (cfg.games.Any(x => Norm(x.name) == kv.Key)) continue;
+            if (!all && cfg.games.Any(x => Norm(x.name) == kv.Key)) continue;
             string t = g.ContainsKey("title") ? g["title"] as string : null;
             res.Add(string.IsNullOrEmpty(t) ? kv.Key : t);
         }
