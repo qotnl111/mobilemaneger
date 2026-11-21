@@ -1,6 +1,6 @@
 {
-  "versionCode": 25,
-  "versionName": "1.24",
+  "versionCode": 26,
+  "versionName": "1.25",
   "apk": "game-manager.apk",
-  "notes": "PC·폰 동기화: 설정에서 서버 주소와 키를 넣으면 컴퓨터에서 한 플레이 시간이 오늘 기록에 더해져요 (서버와 PC 프로그램은 sync 폴더)"
+  "notes": "동기화 개선: 게임별 하루 시작 시각을 서버와 맞춰 새벽 시간대 기록이 어긋나지 않아요"
 }

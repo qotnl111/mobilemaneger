@@ -1854,6 +1854,7 @@ public class MainActivity extends Activity {
                             e.put("day", dashDay(k[0]));
                             e.put("game", label);
                             e.put("ms", ms);
+                            e.put("reset", h);
                             e.put("lastEnd", d == 0 ? prefs.getLong("aa:" + p, 0L) : 0L);
                             entries.put(e);
                         }
