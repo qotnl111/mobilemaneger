@@ -19,7 +19,7 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-public class Game { public string name = ""; public string process = ""; public string processPath = ""; public int dayStart = -1; public string exe = ""; }
+public class Game { public string name = ""; public string process = ""; public string processPath = ""; public int dayStart = -1; public string exe = ""; public string windowTitle = ""; }
 public class Cfg
 {
     public string server = "";
@@ -63,7 +63,7 @@ static class Theme
 class Card
 {
     public string name, title, devs = "", exe = "";
-    public long tot; public bool done, run; public long[] week = new long[7];
+    public long tot; public bool done, run, link; public long[] week = new long[7];
 }
 
 class CardPanel : Panel
@@ -151,6 +151,13 @@ class CardPanel : Panel
                 var ps = g.MeasureString(pill, fPill); var pr = new RectangleF(x, y + 84, ps.Width + 12, 20);
                 using (var p = Theme.Round(pr, 10)) g.FillPath(new SolidBrush(c.done ? Color.FromArgb(0x22, 0x4A, 0xDE, 0x80) : Theme.TODO), p);
                 g.DrawString(pill, fPill, new SolidBrush(c.done ? Theme.DONE : Theme.DARKTXT), pr.X + 6, pr.Y + 2);
+                if (c.link)
+                {
+                    // PC 에서도 기록 중(PC 연동)인 게임 표시
+                    var bs = g.MeasureString("PC 연동", fPill); var br = new RectangleF(pr.Right + 6, y + 84, bs.Width + 10, 20);
+                    using (var p = Theme.Round(br, 10)) { g.FillPath(new SolidBrush(Color.FromArgb(0x26, 0x6E, 0xA8, 0xFF)), p); g.DrawPath(new Pen(Color.FromArgb(0x90, 0x6E, 0xA8, 0xFF)), p); }
+                    g.DrawString("PC 연동", fPill, new SolidBrush(Color.FromArgb(0x6E, 0xA8, 0xFF)), br.X + 5, br.Y + 2);
+                }
                 // 오늘 시간
                 g.DrawString("오늘", fSub, new SolidBrush(Theme.SUB), x, y + 112);
                 g.DrawString(Fmt(c.tot), fBig, new SolidBrush(Theme.TEXT), x - 1, y + 126);
@@ -212,7 +219,7 @@ class MainForm : Form
     Label title, meta;
     Label doneVal; Button doneMinus, donePlus;
     static readonly int[] DoneSteps = { 1, 3, 5, 10, 15, 30 };
-    CheckBox autoRun;
+    CheckBox autoRun, onlyLinked;
     System.Windows.Forms.Timer tickTimer, refreshTimer;
     Dictionary<string, object> lastOverview; string lastError;
 
@@ -251,9 +258,11 @@ class MainForm : Form
         var bDel = new Button { Text = "선택 게임 제거" }; Theme.Btn(bDel, false); bDel.Click += (s, e) => RemoveGame();
         var bRen = new Button { Text = "폰과 이름 맞추기" }; Theme.Btn(bRen, false); bRen.Click += (s, e) => RenameToPhone();
         var bSet = new Button { Text = "서버 설정" }; Theme.Btn(bSet, false); bSet.Click += (s, e) => { Settings(); Reload(); };
-        autoRun = new CheckBox { Text = "윈도우 시작 시 자동 실행", AutoSize = true, Margin = new Padding(14, 8, 0, 0), ForeColor = Theme.SUB };
+        autoRun = new CheckBox { Text = "부팅 시 자동 실행", AutoSize = true, Margin = new Padding(14, 8, 0, 0), ForeColor = Theme.SUB };
         autoRun.CheckedChanged += (s, e) => SetAutoRun(autoRun.Checked);
-        bottom.Controls.AddRange(new Control[] { bAdd, bDel, bRen, bSet, autoRun });
+        onlyLinked = new CheckBox { Text = "PC 연동만", AutoSize = true, Margin = new Padding(14, 8, 0, 0), ForeColor = Theme.SUB };
+        onlyLinked.CheckedChanged += (s, e) => Fill(lastOverview, lastError);
+        bottom.Controls.AddRange(new Control[] { bAdd, bDel, bRen, bSet, onlyLinked, autoRun });
         Controls.Add(bottom);
 
         panel = new CardPanel { Dock = DockStyle.Fill, IconOf = IconOf };
@@ -333,16 +342,19 @@ class MainForm : Form
         try
         {
             if (ps.Length == 0) return false;
-            bool any = string.IsNullOrEmpty(g.processPath);
+            bool any = false;
             foreach (var p in ps)
             {
-                try
+                // windowTitle: 구글 플레이 게임즈(crosvm)처럼 여러 게임이 같은 프로세스 이름을 쓸 때 창 제목으로 구분
+                if (!string.IsNullOrEmpty(g.windowTitle))
                 {
-                    string f = p.MainModule.FileName;
-                    if (!string.IsNullOrEmpty(g.processPath) && f.IndexOf(g.processPath, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                    exePath = f; any = true; break;
+                    string wt; try { wt = p.MainWindowTitle ?? ""; } catch { wt = ""; }
+                    if (wt.IndexOf(g.windowTitle, StringComparison.OrdinalIgnoreCase) < 0) continue;
                 }
-                catch { }
+                string f = null; try { f = p.MainModule.FileName; } catch { }
+                if (!string.IsNullOrEmpty(g.processPath) && (f == null || f.IndexOf(g.processPath, StringComparison.OrdinalIgnoreCase) < 0)) continue;
+                if (f != null) exePath = f;
+                any = true; break;
             }
             return any;
         }
@@ -449,7 +461,7 @@ class MainForm : Form
         {
             var c = new Card { name = name, title = name };
             var cg = cfg.games.FirstOrDefault(x => Norm(x.name) == Norm(name));
-            if (cg != null) { c.exe = cg.exe ?? ""; c.run = running.Contains(cg.name); c.title = cg.name; }
+            if (cg != null) { c.exe = cg.exe ?? ""; c.run = running.Contains(cg.name); c.title = cg.name; c.link = true; }
             bool markDone = false; var devs = new List<string>();
             if (g != null)
             {
@@ -466,6 +478,7 @@ class MainForm : Form
         };
         if (games != null) foreach (var kv in games) { seen.Add(kv.Key); add(kv.Key, kv.Value as Dictionary<string, object>); }
         foreach (var g in cfg.games) if (seen.Add(Norm(g.name))) add(g.name, null);
+        if (onlyLinked.Checked) cards = cards.Where(c => c.link).ToList();
         cards.Sort((a, b) => a.done != b.done ? a.done.CompareTo(b.done) : string.Compare(a.title, b.title, StringComparison.CurrentCulture));
         panel.Cards = cards; panel.Relayout();
         if (err != null) meta.Text = "서버에 연결하지 못했어요 (" + err + ")";
@@ -485,7 +498,7 @@ class MainForm : Form
             {
                 try { if (p.MainWindowTitle.Length > 0 && p.ProcessName != "GameManagerPC") items.Add(new KeyValuePair<string, string>(p.ProcessName, p.MainWindowTitle)); } catch { }
             }
-            foreach (var it in items.GroupBy(i => i.Key).Select(g => g.First()).OrderBy(i => i.Key)) list.Items.Add(it.Key + SEP + it.Value);
+            foreach (var it in items.GroupBy(i => i.Key + "\0" + i.Value).Select(g => g.First()).OrderBy(i => i.Key).ThenBy(i => i.Value)) list.Items.Add(it.Key + SEP + it.Value);
             var lName = new Label { Left = 12, Top = 282, Width = 90, Text = "표시 이름" };
             var tName = new ComboBox { Left = 104, Top = 278, Width = 338, DropDownStyle = ComboBoxStyle.DropDown, FlatStyle = FlatStyle.Flat };
             foreach (var t in PhoneOnlyTitles(true)) tName.Items.Add(t);
@@ -513,7 +526,13 @@ class MainForm : Form
             Theme.Dark(f); Theme.Btn(ok, true); ok.AutoSize = false; cancel.AutoSize = false; ok.Size = cancel.Size = new Size(80, 30);
             f.AcceptButton = ok; f.CancelButton = cancel;
             if (f.ShowDialog(this) != DialogResult.OK || list.SelectedItem == null) return;
-            string proc = ((string)list.SelectedItem).Split(new[] { SEP }, StringSplitOptions.None)[0];
+            var sp = ((string)list.SelectedItem).Split(new[] { SEP }, StringSplitOptions.None);
+            string proc = sp[0], wtitle = "";
+            // 같은 프로세스 이름이 여러 창/게임에 쓰이면(crosvm 등) 창 제목의 앞부분("가디언 테일즈 - xx"의 "가디언 테일즈")으로 구분
+            if (sp.Length > 1 && (proc == "crosvm" || items.Count(i => i.Key == proc) > 1))
+            {
+                wtitle = sp[1].Split(new[] { " - " }, StringSplitOptions.None)[0].Trim();
+            }
             string name = tName.Text.Trim().Length > 0 ? tName.Text.Trim() : proc;
             string exe = "";
             try { var ps = Process.GetProcessesByName(proc); if (ps.Length > 0) exe = ps[0].MainModule.FileName; } catch { }
@@ -522,11 +541,11 @@ class MainForm : Form
             {
                 // 이미 등록된 게임이면 막지 않고, 어떤 프로그램을 이 게임으로 볼지만 바꿔 준다
                 if (MessageBox.Show("'" + same.name + "'은(는) 이미 등록돼 있어요.\n이 게임의 실행 프로그램을 '" + proc + "'(으)로 바꿀까요?", "게임 추가", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
-                same.process = proc; same.processPath = ""; if (exe != "") same.exe = exe;
+                same.process = proc; same.processPath = ""; same.windowTitle = wtitle; if (exe != "") same.exe = exe;
                 if (cHour.SelectedIndex != 0) same.dayStart = cHour.SelectedIndex - 1;
                 SaveConfig(); Tick(); Reload(); return;
             }
-            cfg.games.Add(new Game { name = name, process = proc, exe = exe, dayStart = cHour.SelectedIndex == 0 ? -1 : cHour.SelectedIndex - 1 });
+            cfg.games.Add(new Game { name = name, process = proc, windowTitle = wtitle, exe = exe, dayStart = cHour.SelectedIndex == 0 ? -1 : cHour.SelectedIndex - 1 });
             SaveConfig(); Tick(); Reload();
         }
     }
