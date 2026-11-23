@@ -97,6 +97,7 @@ public class MainActivity extends Activity {
     boolean editMode = false;
     final Set<String> picked = new HashSet<String>();
     TextView editBtn;
+    TextView favBtn;
     TextView removeBtn;
     LinearLayout editBar;
     String selected;
@@ -116,6 +117,7 @@ public class MainActivity extends Activity {
         boolean played;
         boolean manual;
         long base = -1;     // play time when marked not done today; done again at base + threshold
+        boolean fav;        // starred by the person
         long pc;            // today's play time reported by other devices (PC), already included in days[0]
         int streak;         // days done in a row, alive only if done today or yesterday
         int missed = -1;    // days in a row not done, counting today; -1 = no record
@@ -193,6 +195,32 @@ public class MainActivity extends Activity {
         return t;
     }
 
+    // ---------- favorites ----------
+
+    Set<String> favs() {
+        Set<String> f = prefs.getStringSet("favs", null);
+        return f == null ? new HashSet<String>() : new HashSet<String>(f);
+    }
+
+    void toggleFav(String pkg) {
+        Set<String> f = favs();
+        if (!f.remove(pkg)) f.add(pkg);
+        prefs.edit().putStringSet("favs", f).apply();
+        refresh();
+    }
+
+    TextView starView(final Item it, int sp) {
+        TextView t = text(it.fav ? "★" : "☆", sp, it.fav ? TODO : SUB, true);
+        t.setGravity(Gravity.CENTER);
+        t.setClickable(true);
+        t.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                toggleFav(it.pkg);
+            }
+        });
+        return t;
+    }
+
     View buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -216,6 +244,18 @@ public class MainActivity extends Activity {
                 render(lastItems);
             }
         });
+        favBtn = button("☆", CARD, SUB);
+        favBtn.setPadding(dp(14), dp(8), dp(14), dp(8));
+        favBtn.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                prefs.edit().putBoolean("favOnly", !prefs.getBoolean("favOnly", false)).apply();
+                render(lastItems);
+            }
+        });
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        flp.setMargins(0, 0, dp(8), 0);
+        titleRow.addView(favBtn, flp);
         titleRow.addView(editBtn);
         head.addView(titleRow);
         summary = text("", 14, SUB, false);
@@ -341,10 +381,16 @@ public class MainActivity extends Activity {
             c.setBackground(box(sel ? 0xFF282C39 : CARD, sel ? TEXT : (it.played ? LINE : TODO), 18));
         }
 
+        LinearLayout iconRow = new LinearLayout(this);
+        iconRow.setOrientation(LinearLayout.HORIZONTAL);
         ImageView icon = new ImageView(this);
         if (it.icon != null) icon.setImageDrawable(it.icon);
         if (it.played) icon.setAlpha(0.55f);
-        c.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        iconRow.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        iconRow.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        if (!editMode) iconRow.addView(starView(it, 24), new LinearLayout.LayoutParams(dp(44), dp(44)));
+        c.addView(iconRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView name = text(it.label, 15, TEXT, true);
         name.setSingleLine(true);
@@ -501,8 +547,19 @@ public class MainActivity extends Activity {
         return c;
     }
 
-    void render(List<Item> items) {
-        lastItems = items;
+    void render(List<Item> all) {
+        lastItems = all;
+        boolean favOnly = prefs.getBoolean("favOnly", false);
+        List<Item> items = all;
+        if (favOnly) {
+            items = new ArrayList<Item>();
+            for (int i = 0; i < all.size(); i++) {
+                if (all.get(i).fav) items.add(all.get(i));
+            }
+        }
+        favBtn.setText(favOnly ? "★" : "☆");
+        favBtn.setTextColor(favOnly ? 0xFF1A1300 : SUB);
+        favBtn.setBackground(box(favOnly ? TODO : CARD, 0, 12));
         if (selected == null) selected = prefs.getString("sel", null);
         Item selItem = null;
         for (int i = 0; i < items.size(); i++) {
@@ -513,9 +570,9 @@ public class MainActivity extends Activity {
             selected = selItem.pkg;
         }
         showDetail(selItem);
-        armNotifications(items);
+        armNotifications(all);
         Set<String> present = new HashSet<String>();
-        for (int i = 0; i < items.size(); i++) present.add(items.get(i).pkg);
+        for (int i = 0; i < all.size(); i++) present.add(all.get(i).pkg);
         picked.retainAll(present);
         editBtn.setText(editMode ? "완료" : "편집");
         editBtn.setBackground(box(editMode ? TODO : CARD, 0, 12));
@@ -535,14 +592,20 @@ public class MainActivity extends Activity {
         for (int i = 0; i < items.size(); i++) {
             if (items.get(i).played) done++;
         }
-        if (items.isEmpty()) {
+        if (items.isEmpty() && favOnly && !all.isEmpty()) {
+            summary.setText("즐겨찾기한 게임이 없어요");
+            TextView empty = text("카드 오른쪽 위의 ☆를 눌러\n즐겨찾기에 추가하세요", 14, SUB, false);
+            empty.setBackground(box(CARD, LINE, 18));
+            empty.setPadding(dp(20), dp(28), dp(20), dp(28));
+            strip.addView(empty);
+        } else if (items.isEmpty()) {
             summary.setText("추가된 게임이 없어요");
             TextView empty = text("아래 '+ 게임 추가'로\n관리할 게임을 골라 주세요", 14, SUB, false);
             empty.setBackground(box(CARD, LINE, 18));
             empty.setPadding(dp(20), dp(28), dp(20), dp(28));
             strip.addView(empty);
         } else {
-            summary.setText("오늘 " + done + " / " + items.size() + " 완료 · " + minMin() + "분 이상 켜면 자동 완료");
+            summary.setText((favOnly ? "★ 즐겨찾기 " : "오늘 ") + done + " / " + items.size() + " 완료 · " + minMin() + "분 이상 켜면 자동 완료");
         }
         for (int i = 0; i < items.size(); i++) {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -624,6 +687,7 @@ public class MainActivity extends Activity {
         name.setSingleLine(true);
         name.setEllipsize(TextUtils.TruncateAt.END);
         top.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        top.addView(starView(it, 24), new LinearLayout.LayoutParams(dp(44), dp(44)));
         TextView run = button("▶ 실행", TODO, 0xFF1A1300);
         run.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
@@ -1542,6 +1606,7 @@ public class MainActivity extends Activity {
     List<Item> load(boolean access) {
         autoAddOnce();
         Set<String> pkgs = tracked();
+        Set<String> favSet = favs();
         Map<String, Item> map = new HashMap<String, Item>();
         for (String p : pkgs) {
             Item it = new Item();
@@ -1555,6 +1620,7 @@ public class MainActivity extends Activity {
             }
             it.ownHour = prefs.getInt("rh:" + p, -1);
             it.dayHour = it.ownHour >= 0 && it.ownHour <= 23 ? it.ownHour : resetHour();
+            it.fav = favSet.contains(p);
             map.put(p, it);
         }
 
@@ -1755,6 +1821,7 @@ public class MainActivity extends Activity {
         Collections.sort(list, new Comparator<Item>() {
             public int compare(Item a, Item b) {
                 if (a.played != b.played) return a.played ? 1 : -1;   // not played first
+                if (a.fav != b.fav) return a.fav ? -1 : 1;            // starred first
                 if (sortMode == 1) {
                     long ta = untilFull(a, sortNow), tb = untilFull(b, sortNow);
                     if (ta != tb) return ta < tb ? -1 : 1;            // soonest full first

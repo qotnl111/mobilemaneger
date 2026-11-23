@@ -164,6 +164,7 @@ public class GameWidget extends AppWidgetProvider {
         UsageStatsManager usm = (UsageStatsManager) c.getSystemService(Context.USAGE_STATS_SERVICE);
         Set<String> saved = prefs.getStringSet("pkgs", null);
         Set<String> pkgs = saved == null ? new HashSet<String>() : new HashSet<String>(saved);
+        Set<String> favSet = prefs.getStringSet("favs", new HashSet<String>());
         int global = prefs.getInt("resetHour", 4);
         long minMs = prefs.getInt("minMin", 5) * 60000L;
         Map<String, ?> stored = prefs.getAll();
@@ -181,6 +182,7 @@ public class GameWidget extends AppWidgetProvider {
             } catch (Exception e) {
                 it.label = p;
             }
+            it.fav = favSet.contains(p);
             it.ownHour = prefs.getInt("rh:" + p, -1);
             it.dayHour = it.ownHour >= 0 && it.ownHour <= 23 ? it.ownHour : global;
             map.put(p, it);
@@ -246,6 +248,7 @@ public class GameWidget extends AppWidgetProvider {
         Collections.sort(list, new Comparator<MainActivity.Item>() {
             public int compare(MainActivity.Item a, MainActivity.Item b) {
                 if (a.played != b.played) return a.played ? 1 : -1;
+                if (a.fav != b.fav) return a.fav ? -1 : 1;
                 if (sortMode == 1) {
                     long ta = MainActivity.untilFull(a, sortNow), tb = MainActivity.untilFull(b, sortNow);
                     if (ta != tb) return ta < tb ? -1 : 1;
