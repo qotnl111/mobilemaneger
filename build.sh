@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 T=/home/claude/tools
-cd /home/claude/gamelog
+cd "$(dirname "$(readlink -f "$0")")"
 rm -rf out && mkdir -p out/classes out/apk
 $T/aapt2_64 compile --dir res -o out/res.zip
 $T/aapt2_64 link -o out/base.apk -I $T/android.jar --manifest AndroidManifest.xml \
